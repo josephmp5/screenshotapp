@@ -58,13 +58,53 @@ struct CodableColor: Codable, Hashable {
     #endif
 
     var color: Color {
-        #if os(macOS)
-        Color(nsColor)
-        #else
-        Color(uiColor)
-        #endif
+        get {
+            #if os(macOS)
+            Color(nsColor)
+            #else
+            Color(uiColor)
+            #endif
+        }
+        set {
+            #if os(macOS)
+            let nsColor = NSColor(newValue)
+            guard let rgbColor = nsColor.usingColorSpace(.sRGB) else {
+                // Fallback for colors not convertible to sRGB
+                self.red = 0; self.green = 0; self.blue = 0; self.alpha = 1; // Default to black
+                print("Warning: Could not convert color to sRGB during set. Defaulting to black.")
+                return
+            }
+            var r: CGFloat = 0
+            var g: CGFloat = 0
+            var b: CGFloat = 0
+            var a: CGFloat = 0
+            rgbColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+            self.red = Double(r)
+            self.green = Double(g)
+            self.blue = Double(b)
+            self.alpha = Double(a)
+            #else // iOS/watchOS/tvOS
+            let uiColor = UIColor(newValue)
+            var r: CGFloat = 0
+            var g: CGFloat = 0
+            var b: CGFloat = 0
+            var a: CGFloat = 0
+            uiColor.getRed(&r, green: &g, blue: &b, alpha: &a)
+            self.red = Double(r)
+            self.green = Double(g)
+            self.blue = Double(b)
+            self.alpha = Double(a)
+            #endif
+        }
     }
     
+    // Static common colors
+    static let clear = CodableColor(color: .clear)
+    static let black = CodableColor(color: .black)
+    static let white = CodableColor(color: .white)
+    static let primary = CodableColor(color: .primary)
+    // Add other common colors as needed, e.g., .red, .blue, etc.
+
     // Conformance to Hashable
     func hash(into hasher: inout Hasher) {
         hasher.combine(red)
