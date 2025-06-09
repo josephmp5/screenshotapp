@@ -7,7 +7,7 @@ extension UTType {
 }
 
 @MainActor
-class ScreenshotProjectDocument: ReferenceFileDocument, ObservableObject {
+class ScreenshotProjectDocument: ReferenceFileDocument {
     typealias Snapshot = ProjectModel
 
     @Published var project: ProjectModel

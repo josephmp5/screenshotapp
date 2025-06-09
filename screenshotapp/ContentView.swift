@@ -10,7 +10,7 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(currentSelection: $selectedAppSection)
+            SidebarView(document: document, currentSelection: $selectedAppSection)
                 .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 350)
         } content: {
             Group {

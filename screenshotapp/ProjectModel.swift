@@ -54,6 +54,7 @@ struct ImageBackgroundModel: Codable, Hashable {
     var imageData: Data?                // The actual image data
     var tilingMode: ImageTilingMode = .aspectFill // How the image is displayed
     var opacity: Double = 1.0           // Opacity of the image layer
+    var averageColor: CodableColor?     // Optional average color of the image, can be computed
 }
 
 /// A Codable and Hashable wrapper for SwiftUI's UnitPoint.
@@ -95,6 +96,67 @@ enum BackgroundStyle: Codable, Hashable {
     case solid(CodableColor)
     case gradient(GradientModel)
     case image(ImageBackgroundModel)
+
+    enum StyleType: String, CaseIterable, Identifiable {
+        case solid = "Solid Color"
+        case gradient = "Gradient"
+        case image = "Image Background"
+        var id: String { self.rawValue }
+    }
+
+    var styleType: StyleType {
+        switch self {
+        case .solid: return .solid
+        case .gradient: return .gradient
+        case .image: return .image
+        }
+    }
+
+    var isSolid: Bool {
+        if case .solid = self { return true }
+        return false
+    }
+
+    var isGradient: Bool {
+        if case .gradient = self { return true }
+        return false
+    }
+
+    var isImage: Bool {
+        if case .image = self { return true }
+        return false
+    }
+
+    var solidColor: CodableColor? {
+        if case .solid(let color) = self { return color }
+        return nil
+    }
+
+    var gradientModel: GradientModel? {
+        if case .gradient(let model) = self { return model }
+        return nil
+    }
+
+    var imageModel: ImageBackgroundModel? {
+        if case .image(let model) = self { return model }
+        return nil
+    }
+
+    func isEffectivelyEqual(to other: BackgroundStyle) -> Bool {
+        switch (self, other) {
+        case (.solid(let color1), .solid(let color2)):
+            return color1 == color2 // Assumes CodableColor is Equatable
+        case (.gradient(let model1), .gradient(let model2)):
+            return model1 == model2 // Assumes GradientModel is Equatable
+        case (.image(let model1), .image(let model2)):
+            // For images, you might want a more nuanced comparison
+            // e.g., just comparing imageData might be too strict if other props change.
+            // For now, direct equatability of ImageBackgroundModel (which includes imageData).
+            return model1 == model2 // Assumes ImageBackgroundModel is Equatable
+        default:
+            return false // Different types are not equal
+        }
+    }
 }
 
 // MARK: - Text Element and Device Definitions
@@ -368,20 +430,143 @@ enum DeviceFrameType: String, CaseIterable, Identifiable, Codable, Hashable {
     }
 }
 
+// MARK: - Screenshot Page Definition
+
+struct ScreenshotPage: Identifiable, Codable, Hashable {
+    var id = UUID()
+    var name: String? // Optional user-defined name for the page
+    var importedImage: Data?
+    var textElements: [TextElementConfig] = []
+    var backgroundStyle: BackgroundStyle = .solid(CodableColor(color: .gray)) // Default background for a new page
+    var deviceFrameType: DeviceFrameType = .iPhone15Pro // Default device for a new page
+    var deviceFrameOffset: CodableCGSize = .zero
+    var canvasSize: CodableCGSize // Automatically set in init based on deviceFrameType
+    // var scale: CGFloat = 1.0 // Future: Zoom level for this page
+    // var watermark: WatermarkConfig? = nil // Future: Watermark for this page
+    var elements: [CanvasElement] = [] // Future: Draggable elements specific to this page
+
+    mutating func updateCanvasSizeToDefault() {
+        self.canvasSize = ScreenshotPage.defaultCanvasSize(for: self.deviceFrameType)
+    }
+
+    init(id: UUID = UUID(), name: String? = nil, importedImage: Data? = nil, deviceFrameType: DeviceFrameType = .iPhone15Pro) {
+        self.id = id
+        self.name = name
+        self.importedImage = importedImage
+        self.deviceFrameType = deviceFrameType
+        self.canvasSize = ScreenshotPage.defaultCanvasSize(for: deviceFrameType)
+        // Other properties like textElements, backgroundStyle, etc., use their default initial values
+    }
+
+    // Helper to get default canvas size (in points) for a device.
+    // These are example values and should be verified or made more comprehensive.
+    static func defaultCanvasSize(for device: DeviceFrameType) -> CodableCGSize {
+        switch device.deviceType { // Uses the .deviceType mapping from DeviceFrameType
+        case .iPhone:
+            return CodableCGSize(size: CGSize(width: 393, height: 852)) // e.g., iPhone 15 Pro (points)
+        case .iPad:
+            return CodableCGSize(size: CGSize(width: 1024, height: 1366)) // e.g., iPad Pro 12.9-inch (points)
+        case .mac:
+            return CodableCGSize(size: CGSize(width: 1728, height: 1117)) // e.g., MacBook Pro 16-inch (scaled points)
+        }
+    }
+}
+
 // Main project data model
 @MainActor
 struct ProjectModel: Codable, Hashable {
-    var id = UUID()
-    var elements: [CanvasElement] = [] // For future more complex, draggable elements
-    var backgroundStyle: BackgroundStyle = .solid(CodableColor(color: .gray)) // Default background
-    var textElements: [TextElementConfig] = [] // For template-driven text
-    var importedImage: Data? = nil // For the user's screenshot
-    var deviceFrame: DeviceFrameType = .iPhone15Pro // Default device frame
-    var canvasSize: CGSize = CGSize(width: 1179, height: 2556) // Default to iPhone 15 Pro Max like size
-    var deviceFrameOffset: CodableCGSize = .zero // Offset for device mockup dragging
+    var id = UUID() // Project ID
+    var pages: [ScreenshotPage] = []
+    var activePageID: UUID? // ID of the currently active page
 
-    // Add other project-wide settings like zoom level, etc.
+    // Example of a project-global setting (can be added if needed)
+    // var projectGlobalTheme: String = "Default"
+
+    init() {
+        let initialPage = ScreenshotPage(name: "Page 1")
+        self.pages = [initialPage]
+        self.activePageID = initialPage.id
+    }
+
+    // Computed property to get/set the active page's data.
+    // This provides a convenient way to interact with the active page.
+    // In ProjectModel.swift
+
+    // Ensure activePage setter updates the array
+    // In ProjectModel.swift
+
+    var activePage: ScreenshotPage? {
+        get {
+            // If activePageID is nil, and pages exist, return the first page.
+            // If pages is empty, activePageID being nil means no active page.
+            guard let currentActiveID = activePageID else { return pages.first }
+            return pages.first(where: { $0.id == currentActiveID })
+        }
+        set {
+            guard let newPageData = newValue else {
+                // If trying to set activePage to nil (e.g. all pages deleted),
+                // we might want to set activePageID to nil.
+                // For now, if newPageData is nil, we'll just return.
+                // Consider if activePageID should be cleared if pages array becomes empty.
+                return
+            }
+
+            // Determine the ID of the page to update or identify as active.
+            // If activePageID is already set, we use that.
+            // Otherwise, we assume the newPageData.id is the one to make active.
+            let targetID = self.activePageID ?? newPageData.id
+
+            if let index = pages.firstIndex(where: { $0.id == targetID }) {
+                pages[index] = newPageData // Update the page in the array
+                if self.activePageID == nil { // If activePageID was initially nil
+                    self.activePageID = targetID // Set it to the page we just updated
+                }
+            } else {
+                // This means the targetID (either a previous activePageID or newPageData.id)
+                // was not found in the pages array.
+                // A setter should ideally not add new pages; that should be an explicit action.
+                // If activePageID was nil and newPageData.id is not in pages,
+                // this indicates a potential logic issue elsewhere (e.g., a page wasn't added before being set active).
+                print("Error in ProjectModel.activePage.set: Page with ID \(targetID) not found in 'pages' array.")
+            }
+        }
+    }
+
+    mutating func updatePage(_ page: ScreenshotPage) {
+        if let index = pages.firstIndex(where: { $0.id == page.id }) {
+            pages[index] = page
+        }
+    }
+
+    // Make sure ScreenshotPage has an updateCanvasSizeToDefault method:
+    // In ScreenshotPage.swift
+    // mutating func updateCanvasSizeToDefault(for deviceType: DeviceFrameType) {
+    //     self.canvasSize = DeviceFrameType.defaultCanvasSize(for: deviceType)
+    // }
+
+    // And DeviceFrameType has a static method for default canvas size:
+    // In ProjectModel.swift (or wherever DeviceFrameType is defined)
+    // static func defaultCanvasSize(for deviceType: DeviceFrameType) -> CodableCGSize {
+    //     switch deviceType {
+    //         case .iPhone_15_Pro: return CodableCGSize(width: 1179, height: 2556) // Example
+    //         // ... other cases
+    //         default: return CodableCGSize(width: 1200, height: 900) // Generic default
+    //     }
+    // }
     
-    // Swift will synthesize Equatable and Hashable conformance
-    // as all members are Hashable and Equatable.
+    // Function to add a new page (example)
+    mutating func addNewPage(name: String? = nil, importedImage: Data? = nil, deviceFrameType: DeviceFrameType = .iPhone15Pro) {
+        let newPage = ScreenshotPage(name: name ?? "Page \(pages.count + 1)", importedImage: importedImage, deviceFrameType: deviceFrameType)
+        pages.append(newPage)
+        activePageID = newPage.id // Optionally make the new page active
+    }
+
+    // Function to remove a page (example)
+    mutating func removePage(withID id: UUID) {
+        pages.removeAll { $0.id == id }
+        // If the removed page was active, set a new active page (e.g., first page or nil)
+        if activePageID == id {
+            activePageID = pages.first?.id
+        }
+    }
 }

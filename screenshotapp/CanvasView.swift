@@ -3,17 +3,13 @@ import UniformTypeIdentifiers // For export and import panels
 
 // Assuming DeviceMockupView, TemplateProvider, and View+Render.swift (for .renderAsImage) exist.
 
-// Top-level helper function
+// Top-level helper function (Consider moving inside CanvasView or an extension if not used elsewhere)
 private func mapFrameAlignmentToTextAlignment(_ frameAlignment: Alignment) -> TextAlignment {
     switch frameAlignment {
-    case .leading:
-        return .leading
-    case .center:
-        return .center
-    case .trailing:
-        return .trailing
-    default: // .top, .bottom, .topLeading, .topTrailing, .bottomLeading, .bottomTrailing etc.
-        return .center // Default or best guess for other frame alignments
+    case .leading: return .leading
+    case .center: return .center
+    case .trailing: return .trailing
+    default: return .center // Default or best guess
     }
 }
 
@@ -31,247 +27,207 @@ struct CanvasView: View {
     @ObservedObject var document: ScreenshotProjectDocument
     @Environment(\.undoManager) var undoManager
     @Binding var exportTrigger: UUID?
-
-    @State private var selectedTemplateID: UUID? = TemplateProvider.templates.first?.id
     
-    // For pan and zoom (placeholders)
-    @State private var scale: CGFloat = 1.0 // For pan/zoom (placeholder)
-    // @State private var offset: CGSize = .zero // This might be consolidated or used by pan/zoom
-
-    // For live dragging of the device mockup
+    @State private var selectedTemplateID: UUID? = screenshotapp.TemplateProvider.templates.first?.id
+    
+    @State private var scale: CGFloat = 1.0
     @State private var deviceDragGestureState = CGSize.zero
-
-    // For live dragging of text elements
     @State private var draggingTextElementID: UUID? = nil
     @State private var textDragGestureState: CGSize = .zero
+    
+    // Store initial drag offsets for text elements to ensure undo restores to pre-gesture state
+    @State private var initialDragOffsets: [UUID: (positionRatio: CGPoint, offsetPixels: CGSize)] = [:]
 
-    // Computed property for the imported NSImage
     private var currentImportedNSImage: NSImage? {
-        guard let data = document.project.importedImage else { return nil }
+        guard let currentPage = document.project.activePage, let data = currentPage.importedImage else { return nil }
         return NSImage(data: data)
     }
     
-    // Binding for device frame picker
     private var deviceFrameBinding: Binding<DeviceFrameType> {
         Binding(
-            get: { document.project.deviceFrame },
-            set: { newDeviceFrame in
-                let oldDeviceFrame = document.project.deviceFrame
-                if oldDeviceFrame != newDeviceFrame {
-                    DispatchQueue.main.async {
-                        document.project.deviceFrame = newDeviceFrame
-                    }
-                    undoManager?.registerUndo(withTarget: document, handler: { doc in
-                        DispatchQueue.main.async {
-                            doc.project.deviceFrame = oldDeviceFrame
+            get: { document.project.activePage?.deviceFrameType ?? .iPhone15Pro },
+            set: { newDeviceFrameType in
+                guard var currentPage = document.project.activePage else { return }
+                let oldPage = currentPage
+                
+                if currentPage.deviceFrameType != newDeviceFrameType {
+                    currentPage.deviceFrameType = newDeviceFrameType
+                    currentPage.updateCanvasSizeToDefault()
+                    document.project.activePage = currentPage
+                    
+                    let oldPageID = oldPage.id // All properties of oldPage are captured by value here.
+
+                    undoManager?.registerUndo(withTarget: document) { doc_in_undo in
+                        Task { @MainActor in
+                            if var pageToRestore = doc_in_undo.project.pages.first(where: { $0.id == oldPageID }) {
+                                pageToRestore.deviceFrameType = oldPage.deviceFrameType
+                                pageToRestore.canvasSize = oldPage.canvasSize
+                                pageToRestore.importedImage = oldPage.importedImage
+                                doc_in_undo.project.updatePage(pageToRestore)
+                            }
                         }
-                    })
+                    }
                     undoManager?.setActionName("Change Device Frame")
                 }
             }
         )
     }
-
-    private func mapTextAlignmentToFrameAlignment(_ textAlignment: SwiftUI.TextAlignment) -> SwiftUI.Alignment {
-        switch textAlignment {
-        case .leading:
-            return .leading
-        case .center:
-            return .center
-        case .trailing:
-            return .trailing
-        @unknown default:
-            return .center
-        }
-    }
-
+    
     var body: some View {
         HSplitView {
             // Controls Panel
             VStack(alignment: .leading, spacing: 15) {
                 Text("Canvas Controls").font(.title2).padding(.bottom, 5)
-
                 Button(action: importImageWithUndo) {
-                    Text(document.project.importedImage == nil ? "Import Screenshot" : "Replace Screenshot")
+                    Text(document.project.activePage?.importedImage == nil ? "Import Screenshot" : "Replace Screenshot")
                 }
+                .disabled(document.project.activePage == nil)
                 .padding(.vertical, 5)
-
+                
                 if let nsImage = currentImportedNSImage {
                     Image(nsImage: nsImage)
                         .resizable().aspectRatio(contentMode: .fit)
                         .frame(maxWidth: 200, maxHeight: 150).border(Color.gray).padding(.bottom, 5)
                 }
-
+                
                 Picker("Template", selection: $selectedTemplateID) {
-                    ForEach(TemplateProvider.templates) { Text($0.name).tag($0.id as UUID?) }
+                    let templates: [screenshotapp.AppScreenshotTemplate] = screenshotapp.TemplateProvider.templates
+                    ForEach(templates, id: \.id) { template in
+                        Text(template.name).tag(template.id as UUID?)
+                    }
                 }
                 .onChange(of: selectedTemplateID) { _ in applySelectedTemplateWithUndo() }
                 .padding(.bottom, 5)
-
+                
                 Picker("Device", selection: deviceFrameBinding) {
                     ForEach(DeviceFrameType.allCases) { Text($0.displayName).tag($0) }
                 }
-                .pickerStyle(SegmentedPickerStyle()).padding(.bottom, 5)
+                .padding(.bottom, 5)
                 
                 ColorPicker("Solid Background", selection: Binding(
                     get: {
-                        if case .solid(let color) = document.project.backgroundStyle {
+                        if let page = document.project.activePage, case .solid(let color) = page.backgroundStyle {
                             return color.color
                         }
-                        return .gray // Default if not solid
+                        return .gray
                     },
                     set: { newColor in
                         changeBackgroundStyleWithUndo(to: .solid(CodableColor(color: newColor)))
                     }
                 ), supportsOpacity: true)
+                .disabled(document.project.activePage == nil)
                 .padding(.bottom, 5)
-                // TODO: Add controls for gradient backgrounds later
                 
                 Spacer()
-                
                 Button(action: exportScreenshot) {
                     Text("Export Screenshot").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent).padding(.vertical, 10)
-                .disabled(document.project.importedImage == nil)
+                .disabled(document.project.activePage?.importedImage == nil)
             }
             .padding().frame(minWidth: 280, idealWidth: 320, maxWidth: 400)
-
+            
             // Preview Panel
             GeometryReader { geometry in
                 ZStack {
-                    // Render background
-                    switch document.project.backgroundStyle {
-                    case .solid(let codableColor):
-                        codableColor.color.edgesIgnoringSafeArea(.all)
-                    case .gradient(let gradientModel):
-                        LinearGradient(
-                            gradient: Gradient(colors: gradientModel.colors.map { $0.color }),
-                            startPoint: gradientModel.startPoint.unitPoint,
-                            endPoint: gradientModel.endPoint.unitPoint
-                        ).edgesIgnoringSafeArea(.all)
-                    case .image(let imageModel):
-                        if let imageData = imageModel.imageData, let nsImage = NSImage(data: imageData) {
-                            let swiftUIImage = Image(nsImage: nsImage)
-                            
-                            ZStack {
+                    if let activePage = document.project.activePage {
+                        // Background Rendering
+                        switch activePage.backgroundStyle {
+                        case .solid(let codableColor):
+                            codableColor.color.edgesIgnoringSafeArea(.all)
+                        case .gradient(let gradientModel):
+                            LinearGradient(
+                                gradient: Gradient(colors: gradientModel.colors.map { $0.color }),
+                                startPoint: gradientModel.startPoint.unitPoint,
+                                endPoint: gradientModel.endPoint.unitPoint
+                            ).edgesIgnoringSafeArea(.all)
+                        case .image(let imageModel):
+                            if let imageData = imageModel.imageData, let nsImage = NSImage(data: imageData) {
+                                let swiftUIImage = Image(nsImage: nsImage)
+                                ZStack { // Tiling logic
                                     switch imageModel.tilingMode {
-                                    case .stretch: // Stretch to fill, may not preserve aspect ratio perfectly with simple modifiers
-                                        swiftUIImage
-                                    GeometryReader { geo in
-                                        if nsImage.size.width > 0 && nsImage.size.height > 0 {
-                                            let imageWidth = nsImage.size.width
-                                            let imageHeight = nsImage.size.height
-                                            
-                                            let columns = Int(ceil(geo.size.width / imageWidth))
-                                            let rows = Int(ceil(geo.size.height / imageHeight))
-                                            
-                                            VStack(alignment: .leading, spacing: 0) {
-                                                ForEach(0..<rows, id: \.self) { _ in
-                                                    HStack(alignment: .top, spacing: 0) {
-                                                        ForEach(0..<columns, id: \.self) { _ in
-                                                            swiftUIImage
-                                                                .resizable() // Allow it to be framed
-                                                                .frame(width: imageWidth, height: imageHeight)
+                                    case .stretch: // Assuming stretch means tile if image is smaller than view
+                                        GeometryReader { geoTile in 
+                                            if nsImage.size.width > 0 && nsImage.size.height > 0 {
+                                                let imageWidth = nsImage.size.width
+                                                let imageHeight = nsImage.size.height
+                                                let columns = Int(ceil(geoTile.size.width / imageWidth))
+                                                let rows = Int(ceil(geoTile.size.height / imageHeight))
+                                                VStack(alignment: .leading, spacing: 0) {
+                                                    ForEach(0..<max(1, rows), id: \.self) { _ in
+                                                        HStack(alignment: .top, spacing: 0) {
+                                                            ForEach(0..<max(1, columns), id: \.self) { _ in
+                                                                swiftUIImage.resizable().frame(width: imageWidth, height: imageHeight)
+                                                            }
                                                         }
                                                     }
                                                 }
+                                                .frame(width: CGFloat(max(1, columns)) * imageWidth, height: CGFloat(max(1, rows)) * imageHeight, alignment: .topLeading)
+                                            } else {
+                                                 swiftUIImage.resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: .infinity)
                                             }
-                                            .frame(width: CGFloat(columns) * imageWidth, height: CGFloat(rows) * imageHeight, alignment: .topLeading)
-                                            // The .clipped() on the parent ZStack should handle overflow
-                                        } else {
-                                            // Fallback for zero-size image, treat as aspectFit
-                                            swiftUIImage
-                                                    .resizable()
-                                                    .scaledToFit()
-                                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                        }
+                                       .opacity(imageModel.opacity)
+                                    case .aspectFit:
+                                        swiftUIImage.resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: .infinity).opacity(imageModel.opacity)
+                                    case .aspectFill:
+                                        swiftUIImage.resizable().scaledToFill().frame(maxWidth: .infinity, maxHeight: .infinity).opacity(imageModel.opacity)
+                                    @unknown default:
+                                        swiftUIImage.resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: .infinity).opacity(imageModel.opacity)
+                                    }
+                                }
+                                .edgesIgnoringSafeArea(.all)
+                                .clipped()
+                            } else {
+                                Rectangle().fill(Color.gray.opacity(0.3)).overlay(Text("Image Not Loaded").foregroundColor(.white)).edgesIgnoringSafeArea(.all)
+                            }
+                        @unknown default:
+                             Rectangle().fill(Color.gray.opacity(0.1)).overlay(Text("Unsupported Background").foregroundColor(.white)).edgesIgnoringSafeArea(.all)
+                        }
+
+                        // Device Mockup Rendering
+                        DeviceMockupView(
+                            image: self.currentImportedNSImage,
+                            deviceType: activePage.deviceFrameType.deviceType,
+                            backgroundColor: self.backgroundColorForDeviceMockupView(for: activePage.backgroundStyle)
+                        )
+                        .offset(self.deviceDragGestureState)
+                        .gesture(
+                            DragGesture()
+                                .onChanged { value in self.deviceDragGestureState = value.translation }
+                                .onEnded { value in
+                                    let capturedDocument = self.document
+                                    let capturedUndoManager = self.undoManager
+                                    let pageID = activePage.id // activePage is already captured from outer scope
+                                    let oldDeviceFrameOffset = activePage.deviceFrameOffset // Capture before change
+                                    let newDeviceFrameOffset = CodableCGSize(size: CGSize(width: oldDeviceFrameOffset.width + value.translation.width, height: oldDeviceFrameOffset.height + value.translation.height))
+
+                                    capturedUndoManager?.registerUndo(withTarget: capturedDocument) { doc_in_undo in
+                                        Task { @MainActor in
+                                            if var pageToRestore = doc_in_undo.project.pages.first(where: { $0.id == pageID }) {
+                                                pageToRestore.deviceFrameOffset = oldDeviceFrameOffset
+                                                doc_in_undo.project.updatePage(pageToRestore)
+                                            }
                                         }
                                     }
-                                    .opacity(imageModel.opacity)
-                                case .aspectFit:
-                                    swiftUIImage
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                        .opacity(imageModel.opacity)
-                                case .aspectFill:
-                                    swiftUIImage
-                                        .resizable()
-                                        .scaledToFill()
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                        .opacity(imageModel.opacity)
-                                @unknown default:
-                                    swiftUIImage
-                                        .resizable()
-                                        .scaledToFit() // Fallback to aspectFit
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                        .opacity(imageModel.opacity)
-                                }
-                            }
-                            // .opacity(imageModel.opacity) // Removed: Opacity is handled within each case
-                            .edgesIgnoringSafeArea(.all)
-                            .clipped() // Ensure content respects bounds, esp. for .aspectFill
-                        } else {
-                            // Placeholder if image data is missing
-                            Rectangle()
-                                .fill(Color.gray.opacity(0.3))
-                                .overlay(Text("Image Not Loaded").foregroundColor(.white))
-                                .edgesIgnoringSafeArea(.all)
-                        }
-                    @unknown default:
-                        Rectangle().fill(Color.gray.opacity(0.1)).overlay(Text("Unsupported Background").foregroundColor(.white)).edgesIgnoringSafeArea(.all)
-                    }
+                                    capturedUndoManager?.setActionName("Move Device")
 
-                    // Device Mockup (simplified)
-                    DeviceMockupView(
-                        image: currentImportedNSImage,
-                        deviceType: document.project.deviceFrame.deviceType,
-                        backgroundColor: {
-                            if case let .solid(codableColor) = document.project.backgroundStyle {
-                                return codableColor.color
-                            } else {
-                                return Color.white
-                            }
-                        }(),
-                        textOverlay: document.project.textElements.first?.text ?? "",
-                        textColor: document.project.textElements.first?.textColor.color ?? .black,
-                        textAlignment: mapTextAlignmentToFrameAlignment(document.project.textElements.first?.textAlignment.alignment ?? .center),
-                        fontName: document.project.textElements.first?.fontName ?? "System Font",
-                        fontSize: document.project.textElements.first?.fontSize ?? 18
-                    )
-                    .offset(x: document.project.deviceFrameOffset.cgSize.width + deviceDragGestureState.width,
-                            y: document.project.deviceFrameOffset.cgSize.height + deviceDragGestureState.height)
-                    .gesture(
-                        DragGesture()
-                            .onChanged { value in
-                                self.deviceDragGestureState = value.translation
-                            }
-                            .onEnded { value in
-                                let oldOffset = document.project.deviceFrameOffset
-                                let newProposedOffset = CGSize(
-                                    width: document.project.deviceFrameOffset.cgSize.width + value.translation.width,
-                                    height: document.project.deviceFrameOffset.cgSize.height + value.translation.height
-                                )
-                                
-                                DispatchQueue.main.async {
-                                    document.project.deviceFrameOffset = CodableCGSize(size: newProposedOffset)
-                                    self.deviceDragGestureState = .zero // Reset live drag state
-                                    
-                                    undoManager?.registerUndo(withTarget: document, handler: { doc in
-                                        DispatchQueue.main.async {
-                                            doc.project.deviceFrameOffset = oldOffset
+                                    Task { @MainActor in
+                                        if var pageToUpdate = capturedDocument.project.pages.first(where: { $0.id == pageID }) {
+                                            pageToUpdate.deviceFrameOffset = newDeviceFrameOffset
+                                            capturedDocument.project.updatePage(pageToUpdate)
                                         }
-                                    })
-                                    undoManager?.setActionName("Move Device Frame")
+                                    }
+                                    self.deviceDragGestureState = .zero
                                 }
-                            }
-                    )
-                    .scaleEffect(scale) // Keep scale for now, separate from drag offset
-                    // TODO: Add pan/zoom gestures here
-
-                    // Render Text Elements
-                    ForEach(document.project.textElements) { textElement in
-                        renderTextElement(textElement, canvasSize: geometry.size)
+                        )
+                        
+                        // Text Elements Rendering
+                        ForEach(activePage.textElements) { textElement in
+                            renderTextElement(element: textElement, canvasProxySize: geometry.size)
+                        }
+                    } else {
+                        ContentUnavailableView("No Active Page", systemImage: "doc.richtext.fill")
                     }
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
@@ -281,29 +237,29 @@ struct CanvasView: View {
         }
         .onAppear {
             if selectedTemplateID == nil {
-                selectedTemplateID = TemplateProvider.templates.first?.id
+                selectedTemplateID = screenshotapp.TemplateProvider.templates.first?.id
             }
-            applySelectedTemplateWithUndo(isInitialAppearance: true)
+            // applySelectedTemplateWithUndo(isInitialAppearance: true) // Consider if needed on initial appear
         }
-        .onChange(of: exportTrigger) {
-            if exportTrigger != nil { // newValue is implicitly available if needed, but direct check is fine
+        .onChange(of: exportTrigger) { _ in // Changed to _ as newValue is not used
+            if exportTrigger != nil {
                 exportScreenshot()
-                exportTrigger = nil // Reset the trigger
+                exportTrigger = nil
             }
         }
-    }
-    
+    } // End of body
+
     // MARK: - Text Element Rendering
     @ViewBuilder
-    private func renderTextElement(_ element: TextElementConfig, canvasSize: CGSize) -> some View {
-        let text = Text(LocalizedStringKey(element.text)) // Use LocalizedStringKey for potential localization
+    private func renderTextElement(element: TextElementConfig, canvasProxySize: CGSize) -> some View {
+        let text = Text(LocalizedStringKey(element.text))
             .font(.custom(element.fontName, size: element.fontSize))
             .foregroundColor(element.textColor.color)
             .multilineTextAlignment(element.textAlignment.alignment)
         
-        let frameWidth = element.frameWidthRatio != nil ? canvasSize.width * element.frameWidthRatio! : nil
-        let frameHeight = element.frameHeightRatio != nil ? canvasSize.height * element.frameHeightRatio! : nil
-
+        let frameWidth = element.frameWidthRatio != nil ? canvasProxySize.width * element.frameWidthRatio! : nil
+        let frameHeight = element.frameHeightRatio != nil ? canvasProxySize.height * element.frameHeightRatio! : nil
+        
         text
             .frame(width: frameWidth, height: frameHeight, alignment: element.frameAlignment.alignment)
             .padding(element.padding.edgeInsets)
@@ -313,358 +269,295 @@ struct CanvasView: View {
             .scaleEffect(element.scale)
             .shadow(color: element.shadowColor.color.opacity(element.shadowOpacity), radius: element.shadowRadius, x: element.shadowOffset.width, y: element.shadowOffset.height)
             .position(
-                x: element.positionRatio.x * canvasSize.width + element.offsetPixels.width + (draggingTextElementID == element.id ? textDragGestureState.width : 0),
-                y: element.positionRatio.y * canvasSize.height + element.offsetPixels.height + (draggingTextElementID == element.id ? textDragGestureState.height : 0)
+                x: element.positionRatio.x * canvasProxySize.width + element.offsetPixels.width + (draggingTextElementID == element.id ? textDragGestureState.width : 0),
+                y: element.positionRatio.y * canvasProxySize.height + element.offsetPixels.height + (draggingTextElementID == element.id ? textDragGestureState.height : 0)
             )
             .gesture(
                 DragGesture()
                     .onChanged { value in
+                        if self.initialDragOffsets[element.id] == nil {
+                            // Store the state at the beginning of this distinct drag gesture
+                            self.initialDragOffsets[element.id] = (element.positionRatio, element.offsetPixels)
+                        }
                         self.draggingTextElementID = element.id
                         self.textDragGestureState = value.translation
                     }
                     .onEnded { value in
-                        guard let index = document.project.textElements.firstIndex(where: { $0.id == element.id }) else {
-                            self.draggingTextElementID = nil
-                            self.textDragGestureState = .zero
-                            return
+                        let capturedDocument = self.document
+                        let capturedUndoManager = self.undoManager
+                        
+                        guard let pageID = capturedDocument.project.activePage?.id else { 
+                            self.draggingTextElementID = nil; self.textDragGestureState = .zero; self.initialDragOffsets[element.id] = nil; return 
                         }
-                        
-                        let oldElement = document.project.textElements[index]
-                        var newElement = oldElement
-                        
-                        newElement.offsetPixels.width += value.translation.width
-                        newElement.offsetPixels.height += value.translation.height
-                        
-                        DispatchQueue.main.async {
-                            document.project.textElements[index] = newElement
-                        }
-                        
-                        self.draggingTextElementID = nil
-                        self.textDragGestureState = .zero
-                        
-                        undoManager?.registerUndo(withTarget: document, handler: { doc in
-                            DispatchQueue.main.async {
-                                if let revertedIndex = doc.project.textElements.firstIndex(where: { $0.id == oldElement.id }) {
-                                    doc.project.textElements[revertedIndex] = oldElement
+                        let textElementID = element.id
+
+                        // Use initialDragOffsets if set, otherwise use current element's state as pre-drag state
+                        let (oldPositionRatio, oldOffsetPixels) = self.initialDragOffsets[textElementID] ?? (element.positionRatio, element.offsetPixels)
+
+                        // Calculate new state based on drag translation relative to the start of the gesture
+                        let newPositionRatio = CGPoint(
+                            x: oldPositionRatio.x + (value.translation.width / canvasProxySize.width),
+                            y: oldPositionRatio.y + (value.translation.height / canvasProxySize.height)
+                        )
+                        // Assuming offsetPixels are not the primary target of this drag, or handled if they are.
+                        // If offsetPixels are meant to be changed by drag, their original state before this drag gesture started is needed.
+                        let newOffsetPixels = oldOffsetPixels // Or: element.offsetPixels if it's meant to be an absolute value set elsewhere
+
+                        capturedUndoManager?.registerUndo(withTarget: capturedDocument) { doc_in_undo_closure in
+                            Task { @MainActor in
+                                if var pageToRestore = doc_in_undo_closure.project.pages.first(where: { $0.id == pageID }),
+                                   let idx = pageToRestore.textElements.firstIndex(where: { $0.id == textElementID }) {
+                                    pageToRestore.textElements[idx].positionRatio = oldPositionRatio
+                                    pageToRestore.textElements[idx].offsetPixels = oldOffsetPixels
+                                    doc_in_undo_closure.project.updatePage(pageToRestore)
                                 }
                             }
-                        })
-                        undoManager?.setActionName("Move Text")
+                        }
+                        capturedUndoManager?.setActionName("Move Text")
+
+                        Task { @MainActor in
+                            if var pageToUpdate = capturedDocument.project.pages.first(where: { $0.id == pageID }),
+                               let idx = pageToUpdate.textElements.firstIndex(where: { $0.id == textElementID }) {
+                                pageToUpdate.textElements[idx].positionRatio = newPositionRatio
+                                pageToUpdate.textElements[idx].offsetPixels = newOffsetPixels
+                                capturedDocument.project.updatePage(pageToUpdate)
+                            }
+                        }
+                        self.draggingTextElementID = nil
+                        self.textDragGestureState = .zero
+                        self.initialDragOffsets[element.id] = nil // Clear for next distinct gesture
                     }
             )
     }
 
     // MARK: - Undoable Actions
     private func changeBackgroundStyleWithUndo(to newStyle: BackgroundStyle) {
-        let oldStyle = document.project.backgroundStyle
-        // Basic check; for complex enums, might need to be more thorough or rely on Hashable
-        // For now, assume if they are different enough for UI change, they are different.
-        // A proper Equatable conformance on BackgroundStyle would be better.
-        // guard oldStyle != newStyle else { return } // Requires BackgroundStyle to be Equatable
+        guard var currentPage = document.project.activePage else { return }
+        let oldPage = currentPage
+        
+        currentPage.backgroundStyle = newStyle
+        document.project.activePage = currentPage
+        
+        let oldPageID = oldPage.id // All properties of oldPage captured by value
 
-        DispatchQueue.main.async {
-            document.project.backgroundStyle = newStyle
-        }
-        undoManager?.registerUndo(withTarget: document, handler: { doc in
-            DispatchQueue.main.async {
-                doc.project.backgroundStyle = oldStyle
+        undoManager?.registerUndo(withTarget: document) { doc_in_undo in
+            Task { @MainActor in
+                if var pageToRestore = doc_in_undo.project.pages.first(where: { $0.id == oldPageID }) {
+                    pageToRestore.backgroundStyle = oldPage.backgroundStyle // Restore relevant part
+                    // Restore other parts of oldPage if newStyle affects them indirectly
+                    doc_in_undo.project.updatePage(pageToRestore)
+                }
             }
-        })
+        }
         undoManager?.setActionName("Change Background Style")
     }
-    
+
     private func importImageWithUndo() {
+        guard document.project.activePage != nil else { return }
+        
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.png, .jpeg, .heic, .tiff, .gif, .bmp]
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+        
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                let imageData = try Data(contentsOf: url)
+                guard NSImage(data: imageData) != nil else { return }
+                
+                guard var currentPage = document.project.activePage else { return }
+                let oldPage = currentPage
+                
+                currentPage.importedImage = imageData
+                currentPage.updateCanvasSizeToDefault()
+                document.project.activePage = currentPage
+                
+                let oldPageID = oldPage.id
+                let oldImportedImage = oldPage.importedImage // Capture specific old data
+                let oldCanvasSize = oldPage.canvasSize
 
-        if panel.runModal() == .OK {
-            if let url = panel.url, let data = try? Data(contentsOf: url) {
-                let oldImageData = document.project.importedImage
-                DispatchQueue.main.async {
-                    document.project.importedImage = data
-                }
-                undoManager?.registerUndo(withTarget: document, handler: { doc in
-                    DispatchQueue.main.async {
-                        doc.project.importedImage = oldImageData
-                    }
-                })
-                undoManager?.setActionName("Import Screenshot")
-            }
-        }
-    }
-
-    @MainActor
-    private func applySelectedTemplateWithUndo(isInitialAppearance: Bool = false) {
-        guard let templateID = selectedTemplateID,
-              let template = TemplateProvider.templates.first(where: { $0.id == templateID }) else {
-            return
-        }
-
-        let oldBackgroundStyle = document.project.backgroundStyle
-        let oldTextElements = document.project.textElements
-        let oldDeviceFrame = document.project.deviceFrame
-        // let oldImportedImage = document.project.importedImage // If template could change image
-
-        let newDeviceFrame = DeviceFrameType(deviceType: template.deviceType)
-
-        // Only apply and register undo if something actually changes, or if it's a user action.
-        let changed = !isInitialAppearance || oldDeviceFrame != newDeviceFrame
-
-        if changed {
-            // Convert backgroundColor to BackgroundStyle.solid
-            document.project.backgroundStyle = .solid(CodableColor(color: template.backgroundColor))
-            // Convert template's textOverlay and other properties to a TextElementConfig array
-            document.project.textElements = [
-                TextElementConfig(
-                    id: UUID(),
-                    text: template.textOverlay,
-                    fontName: template.fontName,
-                    fontSize: template.fontSize,
-                    textColor: CodableColor(color: template.textColor),
-                    textAlignment: CodableTextAlignment(mapFrameAlignmentToTextAlignment(template.textAlignment)),
-                    frameAlignment: CodableAlignment(template.textAlignment), // Assuming frameAlignment should use textAlignment from template
-                    padding: CodableEdgeInsets(),
-                    backgroundColor: CodableColor(color: .clear),
-                    backgroundOpacity: 0.0,
-                    borderColor: CodableColor(color: .clear),
-                    borderWidth: 0.0,
-                    rotationAngle: 0.0,
-                    scale: 1.0,
-                    shadowColor: CodableColor(color: .clear),
-                    shadowOpacity: 0.0,
-                    shadowRadius: 0.0,
-                    shadowOffset: CGSize.zero
-                )
-            ]
-            DispatchQueue.main.async {
-                document.project.deviceFrame = newDeviceFrame
-            }
-            
-            undoManager?.registerUndo(withTarget: document, handler: { doc in
-                DispatchQueue.main.async {
-                    doc.project.backgroundStyle = oldBackgroundStyle
-                    doc.project.textElements = oldTextElements
-                    doc.project.deviceFrame = oldDeviceFrame
-                }
-            })
-            let actionName = isInitialAppearance ? "Apply Initial Template" : "Apply Template: \(template.name)"
-            undoManager?.setActionName(actionName)
-        }
-    }
-
-    // MARK: - Export
-    private func exportScreenshot() {
-        guard document.project.importedImage != nil else {
-            print("No image to export.")
-            return
-        }
-
-        // Create a view that represents the final exportable content.
-        // This needs to be a GeometryReader to get the canvasSize for text positioning.
-        // The frame for rendering should match the document's canvasSize.
-        let finalCanvasSize = document.project.canvasSize
-
-        let exportView: some View = ZStack {
-            // Render background
-            switch document.project.backgroundStyle {
-            case .solid(let codableColor):
-                codableColor.color
-            case .gradient(let gradientModel):
-                LinearGradient(
-                    gradient: Gradient(colors: gradientModel.colors.map { $0.color }),
-                    startPoint: gradientModel.startPoint.unitPoint,
-                    endPoint: gradientModel.endPoint.unitPoint
-                )
-            case .image(let imageModel):
-                if let imageData = imageModel.imageData, let nsImage = NSImage(data: imageData) {
-                    let swiftUIImage = Image(nsImage: nsImage)
-                    ZStack { // This ZStack is for the tiling modes
-                        switch imageModel.tilingMode {
-                        case .stretch:
-                            swiftUIImage
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .opacity(imageModel.opacity)
-                        case .tile:
-                            GeometryReader { geo in
-                                if nsImage.size.width > 0 && nsImage.size.height > 0 {
-                                    let imageWidth = nsImage.size.width
-                                    let imageHeight = nsImage.size.height
-                                    let columns = Int(ceil(geo.size.width / imageWidth))
-                                    let rows = Int(ceil(geo.size.height / imageHeight))
-                                    
-                                    VStack(alignment: .leading, spacing: 0) {
-                                        ForEach(0..<rows, id: \.self) { _ in
-                                            HStack(alignment: .top, spacing: 0) {
-                                                ForEach(0..<columns, id: \.self) { _ in
-                                                    swiftUIImage
-                                                        .resizable()
-                                                        .frame(width: imageWidth, height: imageHeight)
-                                                }
-                                            }
-                                        }
-                                    }
-                                    .frame(width: CGFloat(columns) * imageWidth, height: CGFloat(rows) * imageHeight, alignment: .topLeading)
-                                } else {
-                                    // Fallback for zero-size image
-                                    swiftUIImage
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                }
-                            }
-                            .opacity(imageModel.opacity)
-                        case .aspectFit:
-                            swiftUIImage
-                                .resizable()
-                                .scaledToFit()
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .opacity(imageModel.opacity)
-                        case .aspectFill:
-                            swiftUIImage
-                                .resizable()
-                                .scaledToFill()
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .opacity(imageModel.opacity)
-                        @unknown default:
-                            swiftUIImage
-                                .resizable()
-                                .scaledToFit()
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .opacity(imageModel.opacity)
+                undoManager?.registerUndo(withTarget: document) { doc_in_undo in
+                    Task { @MainActor in
+                        if var pageToRestore = doc_in_undo.project.pages.first(where: { $0.id == oldPageID }) {
+                            pageToRestore.importedImage = oldImportedImage
+                            pageToRestore.canvasSize = oldCanvasSize
+                            doc_in_undo.project.updatePage(pageToRestore)
                         }
                     }
-                    .edgesIgnoringSafeArea(.all)
-                    .clipped()
-                } else { // Placeholder for missing image
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.3))
-                        .overlay(Text("Image Not Loaded").foregroundColor(.white))
-                        .edgesIgnoringSafeArea(.all)
                 }
-            @unknown default: // for backgroundStyle
-                Rectangle().fill(Color.gray.opacity(0.1)).overlay(Text("Unsupported Background for Export").foregroundColor(.white)).edgesIgnoringSafeArea(.all)
-            } // Closes backgroundStyle switch
+                undoManager?.setActionName("Import Image")
+            } catch {
+                print("Error loading image data from URL: \(error)")
+            }
+        }
+    }
+    
+    @MainActor // Ensure this function is on MainActor as it modifies document.project directly
+    private func applySelectedTemplateWithUndo() { // Removed isInitialAppearance
+        guard var currentPage = document.project.activePage, // Ensure activePage is not nil
+              let templateID = selectedTemplateID,
+              let template = screenshotapp.TemplateProvider.template(withId: templateID) else {
+            // print("No active page or template selected, or templateID is nil.")
+            return
+        }
+        
+        let oldPage = currentPage // Capture for undo
+        
+        currentPage.textElements = template.textElements.map { config -> TextElementConfig in
+            var newConfig = config
+            newConfig.id = UUID() // Ensure new unique IDs
+            return newConfig
+        }
+        currentPage.backgroundStyle = template.backgroundStyle
+        currentPage.deviceFrameType = template.deviceFrame.deviceType
+        currentPage.deviceFrameOffset = CodableCGSize(size: CGSize(width: template.deviceFrame.offset.x, height: template.deviceFrame.offset.y))
+        
+        if let templateCanvasSize = template.canvasSize {
+            currentPage.canvasSize = templateCanvasSize
+        } else {
+            currentPage.updateCanvasSizeToDefault()
+        }
+        // currentPage.importedImage = template.importedImageData // If template carries image data
+        
+        document.project.activePage = currentPage // This should trigger UI update if project is @Published
+        
+        let oldPageID = oldPage.id // All properties of oldPage captured by value
 
-            // Device Mockup View - Renders the device frame and the main imported image if available.
-            // Text overlays are handled separately by the ForEach loop below.
+        undoManager?.registerUndo(withTarget: document) { doc_in_undo in
+            // The 'oldPage' struct is captured by value here, which is Sendable.
+            Task { @MainActor in
+                if var pageToRestore = doc_in_undo.project.pages.first(where: { $0.id == oldPageID }) {
+                    // Restore all relevant properties from the captured oldPage
+                    pageToRestore.textElements = oldPage.textElements
+                    pageToRestore.backgroundStyle = oldPage.backgroundStyle
+                    pageToRestore.deviceFrameType = oldPage.deviceFrameType
+                    pageToRestore.deviceFrameOffset = oldPage.deviceFrameOffset
+                    pageToRestore.canvasSize = oldPage.canvasSize
+                    pageToRestore.importedImage = oldPage.importedImage
+                    doc_in_undo.project.updatePage(pageToRestore)
+                }
+            }
+        }
+        undoManager?.setActionName("Apply Template: \(template.name)")
+    }
+        
+    private func exportScreenshot() {
+        guard let activePage = document.project.activePage, activePage.importedImage != nil else {
+            return
+        }
+
+        let finalCanvasSize = (activePage.canvasSize.width > 0 && activePage.canvasSize.height > 0) ?
+                                activePage.canvasSize.cgSize :
+                                ScreenshotPage.defaultCanvasSize(for: activePage.deviceFrameType).cgSize
+
+        guard finalCanvasSize.width > 0 && finalCanvasSize.height > 0 else { return }
+
+        let viewToRender = ZStack {
+            switch activePage.backgroundStyle {
+            case .solid(let codableColor): codableColor.color
+            case .gradient(let gradientModel):
+                LinearGradient(gradient: Gradient(colors: gradientModel.colors.map { $0.color }),
+                               startPoint: gradientModel.startPoint.unitPoint,
+                               endPoint: gradientModel.endPoint.unitPoint)
+            case .image(let imageModel):
+                if let imgData = imageModel.imageData, let bgNsImage = NSImage(data: imgData) {
+                    Image(nsImage: bgNsImage).resizable().scaledToFill().opacity(imageModel.opacity)
+                } else { Color.gray }
+            }
+
             DeviceMockupView(
-                image: document.project.importedImage.flatMap { NSImage(data: $0) }, // Use the main imported image for the mockup
-                deviceType: document.project.deviceFrame.deviceType,
-                backgroundColor: { // Background for the device mockup area, if needed (e.g., for padding)
-                    if case let .solid(codableColor) = document.project.backgroundStyle {
-                        return codableColor.color
-                    } else {
-                        return Color.clear // Transparent, as the main ZStack handles the actual canvas background
-                    }
-                }(),
-                // Text parameters are set to empty/default as text is rendered by the ForEach loop below
-                textOverlay: "",
-                textColor: .clear,
-                textAlignment: .center, // Default, not used if textOverlay is empty
-                fontName: "System Font", // Default
-                fontSize: 18 // Default
+                image: activePage.importedImage.flatMap { NSImage(data: $0) },
+                deviceType: activePage.deviceFrameType.deviceType,
+                backgroundColor: self.backgroundColorForDeviceMockupViewExport(activePage: activePage)
             )
+            .offset(x: activePage.deviceFrameOffset.width, y: activePage.deviceFrameOffset.height)
 
-            // Render Text Elements over everything else
-            ForEach(document.project.textElements) { textElement in
-                renderTextElement(textElement, canvasSize: finalCanvasSize)
+            ForEach(activePage.textElements) { textElement in
+                renderTextElementForExport(textElement: textElement, canvasSize: finalCanvasSize)
             }
         }
         .frame(width: finalCanvasSize.width, height: finalCanvasSize.height)
         .clipped()
-        
-        guard let imageToExport = exportView.renderAsImage(size: finalCanvasSize) else {
-            print("Failed to render image for export.")
-            return
-        }
+
+        guard let imageToExport = viewToRender.renderAsImage(size: finalCanvasSize) else { return }
 
         let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = [.png, .jpeg]
+        savePanel.allowedContentTypes = [UTType.png]
         savePanel.canCreateDirectories = true
-        savePanel.nameFieldStringValue = "Screenshot-\(document.project.deviceFrame.displayName).png"
+        savePanel.nameFieldStringValue = activePage.name ?? "Screenshot-\(Int(Date().timeIntervalSince1970)).png"
+        savePanel.prompt = "Export"
 
-        if savePanel.runModal() == .OK {
-            if let url = savePanel.url {
-                guard let pngData = imageToExport.pngData() else {
-                    print("Error: Could not get PNG data.")
-                    return
-                }
-
-                do {
-                    try pngData.write(to: url)
-                    print("Image saved to \(url.path)")
-                } catch {
-                    print("Error saving image: \(error.localizedDescription)")
-                }
+        if savePanel.runModal() == .OK, let url = savePanel.url {
+            do {
+                guard let pngData = imageToExport.pngData() else { return }
+                try pngData.write(to: url)
+            } catch {
+                print("Error saving exported image: \(error.localizedDescription)")
             }
         }
     }
-}
+    
+    private func backgroundColorForDeviceMockupView(for backgroundStyle: BackgroundStyle) -> Color {
+        switch backgroundStyle {
+        case .solid(let codableColor): return codableColor.color
+        case .gradient, .image: return .clear
+        }
+    }
+    
+    private func backgroundColorForDeviceMockupViewExport(activePage: ScreenshotPage) -> Color {
+        switch activePage.backgroundStyle {
+        case .solid(let codableColor): return codableColor.color
+        case .gradient, .image: return .clear
+        }
+    }
+
+    @ViewBuilder
+    private func renderTextElementForExport(textElement: TextElementConfig, canvasSize: CGSize) -> some View {
+        Text(textElement.text)
+            .font(.custom(textElement.fontName, size: textElement.fontSize))
+            .foregroundColor(textElement.textColor.color)
+            .multilineTextAlignment(textElement.textAlignment.alignment)
+            .frame(width: textElement.frameWidthRatio != nil ? canvasSize.width * textElement.frameWidthRatio! : nil,
+                   height: textElement.frameHeightRatio != nil ? canvasSize.height * textElement.frameHeightRatio! : nil,
+                   alignment: textElement.frameAlignment.alignment)
+            .padding(textElement.padding.edgeInsets)
+            .background(textElement.backgroundColor.color.opacity(textElement.backgroundOpacity))
+            .border(textElement.borderColor.color, width: textElement.borderWidth)
+            .rotationEffect(.degrees(textElement.rotationAngle))
+            .scaleEffect(textElement.scale)
+            .shadow(color: textElement.shadowColor.color.opacity(textElement.shadowOpacity), radius: textElement.shadowRadius, x: textElement.shadowOffset.width, y: textElement.shadowOffset.height)
+            .position(x: textElement.positionRatio.x * canvasSize.width + textElement.offsetPixels.width,
+                      y: textElement.positionRatio.y * canvasSize.height + textElement.offsetPixels.height)
+    }
+} // End of CanvasView struct
 
 struct CanvasView_Previews: PreviewProvider {
+    // Removed duplicate mapFrameAlignmentToTextAlignment from previews
     static var previews: some View {
-        let previewDocument = ScreenshotProjectDocument()
-        if let firstTemplate = TemplateProvider.templates.first {
-            previewDocument.project.backgroundStyle = .solid(CodableColor(color: firstTemplate.backgroundColor))
-            previewDocument.project.textElements = [
-                TextElementConfig(
-                    id: UUID(),
-                    text: firstTemplate.textOverlay,
-                    fontName: firstTemplate.fontName,
-                    fontSize: firstTemplate.fontSize,
-                    textColor: CodableColor(color: firstTemplate.textColor),
-                    textAlignment: CodableTextAlignment(mapFrameAlignmentToTextAlignment(firstTemplate.textAlignment)),
-                    frameAlignment: CodableAlignment(firstTemplate.textAlignment), // Assuming frameAlignment should use textAlignment from template
-                    padding: CodableEdgeInsets(),
-                    backgroundColor: CodableColor(color: .clear),
-                    backgroundOpacity: 0.0,
-                    borderColor: CodableColor(color: .clear),
-                    borderWidth: 0.0,
-                    rotationAngle: 0.0,
-                    scale: 1.0,
-                    shadowColor: CodableColor(color: .clear),
-                    shadowOpacity: 0.0,
-                    shadowRadius: 0.0,
-                    shadowOffset: CGSize.zero
-                    // cornerRadius: 0.0 // Removed: Not a valid parameter
-                )
-            ]
-            previewDocument.project.deviceFrame = DeviceFrameType(deviceType: firstTemplate.deviceType)
-        } else {
-            // Fallback if no templates are available, provide a default project setup
-            previewDocument.project.backgroundStyle = .solid(CodableColor(color: Color(NSColor.lightGray)))
-            previewDocument.project.textElements = [
-                TextElementConfig(
-                    id: UUID(),
-                    text: "Preview Text",
-                    fontName: "System Font",
-                    fontSize: 30,
-                    textColor: CodableColor(color: .black),
-                    textAlignment: CodableTextAlignment(.center),
-                    frameAlignment: CodableAlignment(.center),
-                    padding: CodableEdgeInsets(),
-                    backgroundColor: CodableColor(color: .clear),
-                    backgroundOpacity: 0.0,
-                    borderColor: CodableColor(color: .clear),
-                    borderWidth: 0.0,
-                    rotationAngle: 0.0,
-                    scale: 1.0,
-                    shadowColor: CodableColor(color: .clear),
-                    shadowOpacity: 0.0,
-                    shadowRadius: 0.0,
-                    shadowOffset: CGSize.zero
-                    // cornerRadius: 0.0 // Removed: Not a valid parameter
-                )
-            ]
-            // You might want to set a default device frame and imported image for the preview too
-            // previewDocument.project.deviceFrame = .iPhone15Pro // Example
-            // if let sampleImage = NSImage(named: "YourSampleImageName") { previewDocument.project.importedImage = sampleImage.tiffRepresentation }
-        }
-        return CanvasView(document: previewDocument, exportTrigger: .constant(nil))
+        let dummyDocument = ScreenshotProjectDocument()
+        let image = NSImage(systemSymbolName: "photo", accessibilityDescription: nil)
+
+        let sampleTextElement = TextElementConfig(
+            id: UUID(), text: "Sample Text", fontName: "Helvetica", fontSize: 30,
+            textColor: CodableColor(color: .white), textAlignment: CodableTextAlignment(.center),
+            frameAlignment: CodableAlignment(.center), positionRatio: CGPoint(x: 0.5, y: 0.2),
+            offsetPixels: CGSize.zero, frameWidthRatio: 0.8, frameHeightRatio: nil,
+            padding: CodableEdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10),
+            backgroundColor: CodableColor(color: .blue), backgroundOpacity: 0.5,
+            borderColor: CodableColor(color: .black), borderWidth: 2, rotationAngle: 0, scale: 1.0,
+            shadowColor: CodableColor(color: .black), shadowOpacity: 0.3, shadowRadius: 5,
+            shadowOffset: CGSize(width: 2, height: 2)
+        )
+
+        var samplePage = ScreenshotPage(id: UUID(), name: "Sample Page 1", importedImage: image?.pngData(), deviceFrameType: .iPhone15Pro)
+        samplePage.backgroundStyle = BackgroundStyle.solid(CodableColor(color: Color(NSColor.lightGray)))
+        samplePage.textElements = [sampleTextElement]
+
+        dummyDocument.project.pages = [samplePage]
+        dummyDocument.project.activePageID = samplePage.id
+
+        return CanvasView(document: dummyDocument, exportTrigger: .constant(nil))
     }
-}
+} // End of CanvasView_Previews struct

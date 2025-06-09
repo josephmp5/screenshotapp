@@ -1,73 +1,37 @@
 import SwiftUI
 
-// Define the structure for an App Screenshot Template
-struct AppScreenshotTemplate: Identifiable {
-    let id = UUID()
+struct AppScreenshotTemplate: Identifiable, Codable, Hashable {
+    var id = UUID()
     var name: String
-    var deviceType: DeviceType
-    var backgroundColor: Color
-    var textOverlay: String
-    var textColor: Color
-    var textAlignment: Alignment // For text overlay position on the mockup
-    var fontName: String
-    var fontSize: CGFloat
-    // Add other properties like specific device frame style, etc. later
+    var textElements: [TextElementConfig] = []
+    var backgroundStyle: BackgroundStyle = .solid(CodableColor(color: .blue))
+    var deviceFrame: DeviceFrameConfig = DeviceFrameConfig(deviceType: .iPhone15Pro, offset: .zero)
+    var canvasSize: CodableCGSize? = nil
 
-    // Example: A simple initializer
-    init(name: String, deviceType: DeviceType, backgroundColor: Color, textOverlay: String, textColor: Color = .white, textAlignment: Alignment = .bottom, fontName: String = "System Font", fontSize: CGFloat = 18) {
+    init(id: UUID = UUID(), name: String, textElements: [TextElementConfig] = [], backgroundStyle: BackgroundStyle = .solid(CodableColor(color: .blue)), deviceFrame: DeviceFrameConfig, canvasSize: CodableCGSize? = nil) {
+        self.id = id
         self.name = name
-        self.deviceType = deviceType
-        self.backgroundColor = backgroundColor
-        self.textOverlay = textOverlay
-        self.textColor = textColor
-        self.textAlignment = textAlignment
-        self.fontName = fontName
-        self.fontSize = fontSize
+        self.textElements = textElements
+        self.backgroundStyle = backgroundStyle
+        self.deviceFrame = deviceFrame
+        self.canvasSize = canvasSize
     }
 }
 
-// Create an array of predefined templates (Phase 1: 5-10 initial templates)
-struct TemplateProvider {
-    static var templates: [AppScreenshotTemplate] = [
-        AppScreenshotTemplate(name: "Classic Blue iPhone", 
-                              deviceType: .iPhone, 
-                              backgroundColor: .blue, 
-                              textOverlay: "Feature Highlight",
-                              textColor: .white,
-                              textAlignment: .bottom,
-                              fontName: "Helvetica Neue",
-                              fontSize: 20),
-        AppScreenshotTemplate(name: "Modern Dark iPad", 
-                              deviceType: .iPad, 
-                              backgroundColor: Color(white: 0.1), 
-                              textOverlay: "Immersive Experience",
-                              textColor: .gray,
-                              textAlignment: .center,
-                              fontName: "Avenir Next",
-                              fontSize: 22),
-        AppScreenshotTemplate(name: "Green Tech Mac", 
-                              deviceType: .mac, 
-                              backgroundColor: .green.opacity(0.7), 
-                              textOverlay: "Powerful & Intuitive",
-                              textColor: .black,
-                              textAlignment: .topLeading,
-                              fontName: "San Francisco", // System font alias
-                              fontSize: 18),
-        AppScreenshotTemplate(name: "Minimalist iPhone Light", 
-                              deviceType: .iPhone, 
-                              backgroundColor: Color(white: 0.95), 
-                              textOverlay: "Clean & Simple UI",
-                              textColor: .black,
-                              textAlignment: .bottomTrailing,
-                              fontName: "Gill Sans",
-                              fontSize: 16),
-        AppScreenshotTemplate(name: "Vibrant iPad Showcase", 
-                              deviceType: .iPad, 
-                              backgroundColor: .orange, 
-                              textOverlay: "Discover What's New",
-                              textColor: .white,
-                              textAlignment: .bottom,
-                              fontName: "Futura",
-                              fontSize: 24)
-    ]
+struct DeviceFrameConfig: Codable, Hashable {
+    var deviceType: DeviceFrameType
+    var offset: CGPoint
+
+    init(deviceType: DeviceFrameType, offset: CGPoint = .zero) {
+        self.deviceType = deviceType
+        self.offset = offset
+    }
 }
+
+// Important: Ensure that the following types are defined and accessible:
+// - TextElementConfig (likely in ProjectModel.swift or its own file)
+// - BackgroundStyle (likely in ProjectModel.swift or Enums.swift)
+// - CodableColor (likely in ProjectModel.swift or a utility file)
+// - CodableCGSize (likely in ProjectModel.swift or a utility file)
+// - DeviceFrameType (likely in Enums.swift)
+// - CGPoint (from SwiftUI/CoreGraphics)

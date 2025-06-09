@@ -3,10 +3,9 @@ import SwiftUI
 struct TextElementEditorView: View {
     @ObservedObject var document: ScreenshotProjectDocument
     @Environment(\.undoManager) var undoManager
-    @Binding var element: TextElementConfig
+    @Binding var element: TextElementConfig // This binding is to the element in InspectorView's list
     
     // Predefined font names for the picker
-    // In a real app, you'd populate this dynamically or have a more robust font selection system.
     private let availableFontNames: [String] = [
         "System Font", "Helvetica Neue", "Arial", "Times New Roman", "Courier New", "Georgia", "Verdana", "Avenir Next"
     ]
@@ -128,24 +127,32 @@ struct TextElementEditorView: View {
 
     // MARK: - Helper for Creating Bindings with Undo
 
-    // Binding for direct properties of TextElementConfig
     private func makeBinding<Value>(for keyPath: WritableKeyPath<TextElementConfig, Value>, actionName: String) -> Binding<Value> where Value: Equatable {
         Binding(
             get: { self.element[keyPath: keyPath] },
             set: { newValue in
-                let oldValue = self.element[keyPath: keyPath]
-                if oldValue != newValue {
-                    let oldElement = self.element // Capture the whole element for undo
-                    self.element[keyPath: keyPath] = newValue
-                    let newElement = self.element // Capture the modified element
+                let oldValueInState = self.element[keyPath: keyPath]
+                if oldValueInState != newValue {
+                    let oldElementFromDoc = self.element // This is the element from the @Binding, reflecting current state in document
                     
-                    // Update the document's project
-                    if let index = document.project.textElements.firstIndex(where: { $0.id == self.element.id }) {
-                        document.project.textElements[index] = newElement
+                    // Create a mutable copy to apply the change, then update the @Binding
+                    var modifiedElement = self.element 
+                    modifiedElement[keyPath: keyPath] = newValue
+                    self.element = modifiedElement // This updates the @Binding, which InspectorView owns
+
+                    // Now, reflect this change in the document's activePage and register undo
+                    guard var activePage = document.project.activePage else { return }
+                    let pageID = activePage.id
+
+                    if let indexInPage = activePage.textElements.firstIndex(where: { $0.id == oldElementFromDoc.id }) {
+                        activePage.textElements[indexInPage] = modifiedElement
+                        document.project.activePage = activePage
                         
                         undoManager?.registerUndo(withTarget: document, handler: { doc in
-                            if let idx = doc.project.textElements.firstIndex(where: { $0.id == oldElement.id }) {
-                                doc.project.textElements[idx] = oldElement
+                            if var targetPage = doc.project.pages.first(where: { $0.id == pageID }),
+                               let idx = targetPage.textElements.firstIndex(where: { $0.id == oldElementFromDoc.id }) {
+                                targetPage.textElements[idx] = oldElementFromDoc // Revert to the original state of the element
+                                doc.project.updatePage(targetPage)
                             }
                         })
                         undoManager?.setActionName(actionName)
@@ -155,27 +162,33 @@ struct TextElementEditorView: View {
         )
     }
 
-    // Binding for properties within nested structs (like CodableColor.color or CGPoint.x)
     private func makeBinding<Value, OuterValue>(for innerKeyPath: WritableKeyPath<OuterValue, Value>, mappedTo outerKeyPath: WritableKeyPath<TextElementConfig, OuterValue>, actionName: String) -> Binding<Value> where Value: Equatable, OuterValue: Equatable {
         Binding(
             get: { self.element[keyPath: outerKeyPath][keyPath: innerKeyPath] },
             set: { newValue in
-                let oldOuterValue = self.element[keyPath: outerKeyPath]
-                var newOuterValue = oldOuterValue
+                let oldOuterValueInState = self.element[keyPath: outerKeyPath]
+                var newOuterValue = oldOuterValueInState
                 newOuterValue[keyPath: innerKeyPath] = newValue
-                
-                if oldOuterValue != newOuterValue {
-                    let oldElement = self.element // Capture the whole element for undo
-                    self.element[keyPath: outerKeyPath] = newOuterValue
-                    let newElement = self.element // Capture the modified element
 
-                    // Update the document's project
-                    if let index = document.project.textElements.firstIndex(where: { $0.id == self.element.id }) {
-                        document.project.textElements[index] = newElement
+                if oldOuterValueInState != newOuterValue {
+                    let oldElementFromDoc = self.element
+                    
+                    var modifiedElement = self.element
+                    modifiedElement[keyPath: outerKeyPath] = newOuterValue
+                    self.element = modifiedElement // Update @Binding
+
+                    guard var activePage = document.project.activePage else { return }
+                    let pageID = activePage.id
+
+                    if let indexInPage = activePage.textElements.firstIndex(where: { $0.id == oldElementFromDoc.id }) {
+                        activePage.textElements[indexInPage] = modifiedElement
+                        document.project.activePage = activePage
                         
                         undoManager?.registerUndo(withTarget: document, handler: { doc in
-                            if let idx = doc.project.textElements.firstIndex(where: { $0.id == oldElement.id }) {
-                                doc.project.textElements[idx] = oldElement
+                            if var targetPage = doc.project.pages.first(where: { $0.id == pageID }),
+                               let idx = targetPage.textElements.firstIndex(where: { $0.id == oldElementFromDoc.id }) {
+                                targetPage.textElements[idx] = oldElementFromDoc
+                                doc.project.updatePage(targetPage)
                             }
                         })
                         undoManager?.setActionName(actionName)
@@ -188,42 +201,39 @@ struct TextElementEditorView: View {
 
 struct TextElementEditorView_Previews: PreviewProvider {
     struct PreviewWrapper: View {
-        @State var element = TextElementConfig(
-            text: "Sample Text",
-            fontName: "Helvetica Neue",
-            fontSize: 32,
-            textColor: CodableColor(color: .black),
-            textAlignment: .center,
-            frameAlignment: .center,
-            positionRatio: CGPoint(x: 0.5, y: 0.5)
-        )
-        @StateObject var previewDocument = ScreenshotProjectDocument()
+        @State var element: TextElementConfig
+        @StateObject var previewDocument: ScreenshotProjectDocument
+
+        // Initializer to set up the document and element for the preview
+        init() {
+            let doc = ScreenshotProjectDocument()
+            var samplePage = ScreenshotPage(name: "Preview Page")
+            var initialElement = TextElementConfig(
+                text: "Sample Text",
+                fontName: "Helvetica Neue",
+                fontSize: 32,
+                textColor: CodableColor(color: .black),
+                textAlignment: .center,
+                frameAlignment: .center,
+                positionRatio: CGPoint(x: 0.5, y: 0.5)
+            )
+            samplePage.textElements.append(initialElement)
+            doc.project.pages.append(samplePage)
+            doc.project.activePageID = samplePage.id
+            
+            _previewDocument = StateObject(wrappedValue: doc)
+            // Initialize the @State 'element' with the one from the document's active page
+            // This ensures the binding starts with the correct reference for the preview.
+            if let active = doc.project.activePage, let firstElement = active.textElements.first {
+                _element = State(initialValue: firstElement)
+            } else {
+                // Fallback if no element, though the setup above should ensure one exists
+                _element = State(initialValue: initialElement) 
+            }
+        }
 
         var body: some View {
-            // Ensure the element is in the document for the bindings to work correctly in preview
-            let _ = { 
-                if previewDocument.project.textElements.isEmpty {
-                    previewDocument.project.textElements.append(element)
-                } else {
-                    previewDocument.project.textElements[0] = element
-                }
-            }()
-            
-            // Update the binding to point to the element within the document for preview
-            let elementBinding = Binding(
-                get: { previewDocument.project.textElements.first ?? element },
-                set: { updatedElement in 
-                    if let index = previewDocument.project.textElements.firstIndex(where: { $0.id == updatedElement.id }) {
-                        previewDocument.project.textElements[index] = updatedElement
-                    } else if !previewDocument.project.textElements.isEmpty {
-                        previewDocument.project.textElements[0] = updatedElement // Fallback for initial setup
-                    }
-                    // Update the local @State element as well if needed for other parts of the preview
-                    self.element = updatedElement 
-                }
-            )
-            
-            TextElementEditorView(document: previewDocument, element: elementBinding)
+            TextElementEditorView(document: previewDocument, element: $element)
         }
     }
 

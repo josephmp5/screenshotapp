@@ -4,11 +4,12 @@ struct DeviceMockupView: View {
     let image: NSImage?
     let deviceType: DeviceType
     let backgroundColor: Color
-    let textOverlay: String
-    let textColor: Color
-    let textAlignment: Alignment
-    let fontName: String
-    let fontSize: CGFloat
+    // Text rendering removed from DeviceMockupView
+    // let textOverlay: String
+    // let textColor: Color
+    // let textAlignment: Alignment
+    // let fontName: String
+    // let fontSize: CGFloat
 
     var body: some View {
         ZStack {
@@ -53,24 +54,7 @@ struct DeviceMockupView: View {
                                 }
                             }
                         )
-                        // Text Overlay (applied on top of device details)
-                        .overlay(
-                            VStack {
-                                Spacer() // Pushes text to its alignment position based on overall frame
-                            }
-                            .frame(width: deviceFrame.width, height: deviceFrame.height)
-                            .overlay(
-                                Text(textOverlay)
-                                    .font(fontName == "System Font" ? .system(size: fontSize, weight: .bold) : .custom(fontName, size: fontSize))
-                                    .fontWeight(.bold) // Keep bold for system font, custom fonts might have their own weights
-                                    .foregroundColor(textColor)
-                                    .padding(8)
-                                    .background(Color.black.opacity(0.5))
-                                    .cornerRadius(5)
-                                    .padding(10), // Padding from the edges of the image
-                                alignment: textAlignment // Use the passed alignment
-                            )
-                        )
+                        // Text Overlay logic removed
                 } else {
                     Text("Import an image to see the preview")
                         .foregroundColor(.secondary)
@@ -127,34 +111,37 @@ struct DeviceMockupView_Previews: PreviewProvider {
         Group {
             DeviceMockupView(image: placeholderImage, 
                              deviceType: .iPhone, 
-                             backgroundColor: .blue, 
-                             textOverlay: "iPhone Preview Text", 
-                             textColor: .white, 
-                             textAlignment: .bottom,
-                             fontName: "System Font",
-                             fontSize: 18)
+                             backgroundColor: .blue 
+                             // textOverlay: "iPhone Preview Text", 
+                             // textColor: .white, 
+                             // textAlignment: .bottom,
+                             // fontName: "System Font",
+                             // fontSize: 18
+                             )
                 .previewLayout(.sizeThatFits)
                 .frame(width: 300, height: 600)
             
             DeviceMockupView(image: placeholderImage, 
                              deviceType: .iPad, 
-                             backgroundColor: .green, 
-                             textOverlay: "iPad Preview Text", 
-                             textColor: .black, 
-                             textAlignment: .center,
-                             fontName: "Helvetica Neue",
-                             fontSize: 22)
+                             backgroundColor: .green 
+                             // textOverlay: "iPad Preview Text", 
+                             // textColor: .black, 
+                             // textAlignment: .center,
+                             // fontName: "Helvetica Neue",
+                             // fontSize: 22
+                             )
                 .previewLayout(.sizeThatFits)
                 .frame(width: 400, height: 600)
 
             DeviceMockupView(image: placeholderImage, 
                              deviceType: .mac, 
-                             backgroundColor: .purple, 
-                             textOverlay: "Mac Preview Text", 
-                             textColor: .yellow, 
-                             textAlignment: .topLeading,
-                             fontName: "Futura",
-                             fontSize: 20)
+                             backgroundColor: .purple 
+                             // textOverlay: "Mac Preview Text", 
+                             // textColor: .yellow, 
+                             // textAlignment: .topLeading,
+                             // fontName: "Futura",
+                             // fontSize: 20
+                             )
                 .previewLayout(.sizeThatFits)
                 .frame(width: 550, height: 450)
         }

@@ -136,19 +136,26 @@ struct GradientEditorView: View {
     }
     
     private func registerUndo(oldGradient: GradientModel, newGradient: GradientModel, actionName: String) {
-        // This assumes the binding change itself might not be directly undoable
-        // or that we want to group changes to the document's backgroundStyle.
-        let oldBackgroundStyle = document.project.backgroundStyle
+        guard var activePage = document.project.activePage else {
+            print("GradientEditorView: No active page found to register undo.")
+            return
+        }
         
-        // Update the document's project directly, as the @Binding might be to a temporary copy
-        // or we want to ensure the document's state is the source of truth for undo.
-        document.project.backgroundStyle = .gradient(newGradient)
+        let originalPageBackgroundStyle = activePage.backgroundStyle // Store the original style of the active page
+        
+        // Apply the new gradient to the active page's background style
+        activePage.backgroundStyle = .gradient(newGradient)
+        
+        // Update the document's project with the modified active page
+        document.project.activePage = activePage 
         
         undoManager?.registerUndo(withTarget: document, handler: { doc in
-            doc.project.backgroundStyle = oldBackgroundStyle // Revert to the entire old style
-            // If the binding was to a direct part of the document, this might be redundant
-            // or could conflict. For complex nested bindings, it's often safer to manage
-            // undo at the document level with whole-struct changes or specific setters.
+            guard var pageToRevert = doc.project.activePage else {
+                 print("GradientEditorView Undo: No active page found to revert.")
+                return
+            }
+            pageToRevert.backgroundStyle = originalPageBackgroundStyle // Revert to the original style
+            doc.project.activePage = pageToRevert // Update the document
         })
         undoManager?.setActionName(actionName)
     }
@@ -183,7 +190,7 @@ struct GradientEditorView_Previews: PreviewProvider {
 
         var body: some View {
             // Initialize document's background style for context in undo
-            let _ = previewDocument.project.backgroundStyle = .gradient(gradient)
+            let _ = { if var page = previewDocument.project.activePage { page.backgroundStyle = .gradient(gradient); previewDocument.project.activePage = page } }()
             
             GradientEditorView(document: previewDocument, gradient: $gradient)
                 .padding()
