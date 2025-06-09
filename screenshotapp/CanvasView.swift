@@ -73,6 +73,91 @@ struct CanvasView: View {
         )
     }
     
+    private var imageScaleBinding: Binding<CGFloat> {
+        Binding<CGFloat>(
+            get: { self.document.project.activePage?.imageScale ?? 1.0 },
+            set: { newScale in
+                guard let pageID = self.document.project.activePage?.id else { return }
+                let oldScale = self.document.project.activePage?.imageScale ?? 1.0
+
+                self.undoManager?.registerUndo(withTarget: self.document) { doc in
+                    Task { @MainActor in
+                        if var pageToRestore = doc.project.pages.first(where: { $0.id == pageID }) {
+                            pageToRestore.imageScale = oldScale
+                            doc.project.updatePage(pageToRestore)
+                        }
+                    }
+                }
+                self.undoManager?.setActionName("Adjust Image Scale")
+
+                Task { @MainActor in
+                    if var pageToUpdate = self.document.project.pages.first(where: { $0.id == pageID }) {
+                        pageToUpdate.imageScale = newScale
+                        self.document.project.updatePage(pageToUpdate)
+                    }
+                }
+            }
+        )
+    }
+
+    private var imageOffsetXBinding: Binding<CGFloat> {
+        Binding<CGFloat>(
+            get: { self.document.project.activePage?.imageOffset.cgSize.width ?? 0.0 },
+            set: { newOffsetX in
+                guard let pageID = self.document.project.activePage?.id else { return }
+                let oldOffset = self.document.project.activePage?.imageOffset.cgSize ?? .zero
+
+                self.undoManager?.registerUndo(withTarget: self.document) { doc in
+                    Task { @MainActor in
+                        if var pageToRestore = doc.project.pages.first(where: { $0.id == pageID }) {
+                            pageToRestore.imageOffset = CodableCGSize(size: oldOffset)
+                            doc.project.updatePage(pageToRestore)
+                        }
+                    }
+                }
+                self.undoManager?.setActionName("Adjust Image Offset X")
+
+                Task { @MainActor in
+                    if var pageToUpdate = self.document.project.pages.first(where: { $0.id == pageID }) {
+                        var currentOffset = pageToUpdate.imageOffset.cgSize
+                        currentOffset.width = newOffsetX
+                        pageToUpdate.imageOffset = CodableCGSize(size: currentOffset)
+                        self.document.project.updatePage(pageToUpdate)
+                    }
+                }
+            }
+        )
+    }
+
+    private var imageOffsetYBinding: Binding<CGFloat> {
+        Binding<CGFloat>(
+            get: { self.document.project.activePage?.imageOffset.cgSize.height ?? 0.0 },
+            set: { newOffsetY in
+                guard let pageID = self.document.project.activePage?.id else { return }
+                let oldOffset = self.document.project.activePage?.imageOffset.cgSize ?? .zero
+
+                self.undoManager?.registerUndo(withTarget: self.document) { doc in
+                    Task { @MainActor in
+                        if var pageToRestore = doc.project.pages.first(where: { $0.id == pageID }) {
+                            pageToRestore.imageOffset = CodableCGSize(size: oldOffset)
+                            doc.project.updatePage(pageToRestore)
+                        }
+                    }
+                }
+                self.undoManager?.setActionName("Adjust Image Offset Y")
+
+                Task { @MainActor in
+                    if var pageToUpdate = self.document.project.pages.first(where: { $0.id == pageID }) {
+                        var currentOffset = pageToUpdate.imageOffset.cgSize
+                        currentOffset.height = newOffsetY
+                        pageToUpdate.imageOffset = CodableCGSize(size: currentOffset)
+                        self.document.project.updatePage(pageToUpdate)
+                    }
+                }
+            }
+        )
+    }
+
     var body: some View {
         HSplitView {
             // Controls Panel
@@ -102,6 +187,19 @@ struct CanvasView: View {
                 Picker("Device", selection: deviceFrameBinding) {
                     ForEach(DeviceFrameType.allCases) { Text($0.displayName).tag($0) }
                 }
+                .padding(.bottom, 5)
+
+                Section("Imported Image Adjustments") {
+                    VStack(alignment: .leading) {
+                        Text("Scale: \(document.project.activePage?.imageScale ?? 1.0, specifier: "%.2f")")
+                        Slider(value: imageScaleBinding, in: 0.2...5.0, step: 0.05) {
+                            Text("Scale") // Accessibility label
+                        }
+                    }
+                    Stepper("Offset X: \(Int(document.project.activePage?.imageOffset.cgSize.width ?? 0)) px", value: imageOffsetXBinding, step: 5)
+                    Stepper("Offset Y: \(Int(document.project.activePage?.imageOffset.cgSize.height ?? 0)) px", value: imageOffsetYBinding, step: 5)
+                }
+                .disabled(document.project.activePage?.importedImage == nil)
                 .padding(.bottom, 5)
                 
                 ColorPicker("Solid Background", selection: Binding(
@@ -189,8 +287,10 @@ struct CanvasView: View {
                         DeviceMockupView(
                             image: self.currentImportedNSImage,
                             deviceType: activePage.deviceFrameType.deviceType,
-                            backgroundColor: self.backgroundColorForDeviceMockupView(for: activePage.backgroundStyle)
-                        )
+                            backgroundColor: self.backgroundColorForDeviceMockupView(for: activePage.backgroundStyle),
+                            targetHeight: nil, // No target height for live preview, it scales to fit geometry
+                            imageScale: activePage.imageScale,
+                            imageOffset: activePage.imageOffset.cgSize)
                         .offset(self.deviceDragGestureState)
                         .gesture(
                             DragGesture()
@@ -448,34 +548,59 @@ struct CanvasView: View {
             return
         }
 
-        let finalCanvasSize = (activePage.canvasSize.width > 0 && activePage.canvasSize.height > 0) ?
-                                activePage.canvasSize.cgSize :
-                                ScreenshotPage.defaultCanvasSize(for: activePage.deviceFrameType).cgSize
+        let finalCanvasSize = CGSize(width: 1290, height: 2796)
 
         guard finalCanvasSize.width > 0 && finalCanvasSize.height > 0 else { return }
 
+        // Pre-calculate all necessary values
+        let defaultDeviceSize: CGSize
+        switch activePage.deviceFrameType.deviceType {
+        case .iPhone: defaultDeviceSize = CGSize(width: 200, height: 410)
+        case .iPad: defaultDeviceSize = CGSize(width: 300, height: 420)
+        case .mac: defaultDeviceSize = CGSize(width: 450, height: 280)
+        }
+
+        let deviceTargetHeight = finalCanvasSize.height * 0.85
+        let aspectRatio = defaultDeviceSize.width / defaultDeviceSize.height
+        let scaledDeviceWidth = deviceTargetHeight * aspectRatio
+
+        let deviceOriginX = (finalCanvasSize.width - scaledDeviceWidth) / 2 + activePage.deviceFrameOffset.width
+        let deviceOriginY = (finalCanvasSize.height - deviceTargetHeight) / 2 + activePage.deviceFrameOffset.height
+        let deviceFrameInCanvas = CGRect(x: deviceOriginX, y: deviceOriginY, width: scaledDeviceWidth, height: deviceTargetHeight)
+
+        let baseFontDeviceHeight: CGFloat = 410.0 // iPhone default height as base for font scaling
+        let fontScaleFactor = deviceTargetHeight / baseFontDeviceHeight
+
         let viewToRender = ZStack {
-            switch activePage.backgroundStyle {
-            case .solid(let codableColor): codableColor.color
-            case .gradient(let gradientModel):
-                LinearGradient(gradient: Gradient(colors: gradientModel.colors.map { $0.color }),
-                               startPoint: gradientModel.startPoint.unitPoint,
-                               endPoint: gradientModel.endPoint.unitPoint)
-            case .image(let imageModel):
-                if let imgData = imageModel.imageData, let bgNsImage = NSImage(data: imgData) {
-                    Image(nsImage: bgNsImage).resizable().scaledToFill().opacity(imageModel.opacity)
-                } else { Color.gray }
-            }
+            AnyView(
+                Group {
+                    switch activePage.backgroundStyle {
+                    case .solid(let codableColor): codableColor.color
+                    case .gradient(let gradientModel):
+                        LinearGradient(gradient: Gradient(colors: gradientModel.colors.map { $0.color }),
+                                       startPoint: gradientModel.startPoint.unitPoint,
+                                       endPoint: gradientModel.endPoint.unitPoint)
+                    case .image(let imageModel):
+                        if let imgData = imageModel.imageData, let bgNsImage = NSImage(data: imgData) {
+                            Image(nsImage: bgNsImage).resizable().scaledToFill().opacity(imageModel.opacity)
+                        } else { Color.gray }
+                    }
+                }
+            )
 
             DeviceMockupView(
                 image: activePage.importedImage.flatMap { NSImage(data: $0) },
                 deviceType: activePage.deviceFrameType.deviceType,
-                backgroundColor: self.backgroundColorForDeviceMockupViewExport(activePage: activePage)
+                backgroundColor: self.backgroundColorForDeviceMockupViewExport(activePage: activePage),
+                targetHeight: deviceTargetHeight,
+                imageScale: activePage.imageScale,
+                imageOffset: activePage.imageOffset.cgSize
             )
-            .offset(x: activePage.deviceFrameOffset.width, y: activePage.deviceFrameOffset.height)
+            .frame(width: scaledDeviceWidth, height: deviceTargetHeight)
+            .position(x: deviceFrameInCanvas.midX, y: deviceFrameInCanvas.midY)
 
             ForEach(activePage.textElements) { textElement in
-                renderTextElementForExport(textElement: textElement, canvasSize: finalCanvasSize)
+                renderTextElementForExport(textElement: textElement, deviceFrameInCanvas: deviceFrameInCanvas, fontScaleFactor: fontScaleFactor)
             }
         }
         .frame(width: finalCanvasSize.width, height: finalCanvasSize.height)
@@ -514,13 +639,13 @@ struct CanvasView: View {
     }
 
     @ViewBuilder
-    private func renderTextElementForExport(textElement: TextElementConfig, canvasSize: CGSize) -> some View {
+    private func renderTextElementForExport(textElement: TextElementConfig, deviceFrameInCanvas: CGRect, fontScaleFactor: CGFloat) -> some View {
         Text(textElement.text)
-            .font(.custom(textElement.fontName, size: textElement.fontSize))
+            .font(.custom(textElement.fontName, size: textElement.fontSize * fontScaleFactor))
             .foregroundColor(textElement.textColor.color)
             .multilineTextAlignment(textElement.textAlignment.alignment)
-            .frame(width: textElement.frameWidthRatio != nil ? canvasSize.width * textElement.frameWidthRatio! : nil,
-                   height: textElement.frameHeightRatio != nil ? canvasSize.height * textElement.frameHeightRatio! : nil,
+            .frame(width: textElement.frameWidthRatio != nil ? deviceFrameInCanvas.width * textElement.frameWidthRatio! : nil,
+                   height: textElement.frameHeightRatio != nil ? deviceFrameInCanvas.height * textElement.frameHeightRatio! : nil,
                    alignment: textElement.frameAlignment.alignment)
             .padding(textElement.padding.edgeInsets)
             .background(textElement.backgroundColor.color.opacity(textElement.backgroundOpacity))
@@ -528,8 +653,8 @@ struct CanvasView: View {
             .rotationEffect(.degrees(textElement.rotationAngle))
             .scaleEffect(textElement.scale)
             .shadow(color: textElement.shadowColor.color.opacity(textElement.shadowOpacity), radius: textElement.shadowRadius, x: textElement.shadowOffset.width, y: textElement.shadowOffset.height)
-            .position(x: textElement.positionRatio.x * canvasSize.width + textElement.offsetPixels.width,
-                      y: textElement.positionRatio.y * canvasSize.height + textElement.offsetPixels.height)
+            .position(x: deviceFrameInCanvas.origin.x + (textElement.positionRatio.x * deviceFrameInCanvas.width) + (textElement.offsetPixels.width * fontScaleFactor),
+                       y: deviceFrameInCanvas.origin.y + (textElement.positionRatio.y * deviceFrameInCanvas.height) + (textElement.offsetPixels.height * fontScaleFactor))
     }
 } // End of CanvasView struct
 

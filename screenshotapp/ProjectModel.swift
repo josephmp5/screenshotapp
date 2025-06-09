@@ -437,7 +437,11 @@ struct ScreenshotPage: Identifiable, Codable, Hashable {
     var name: String? // Optional user-defined name for the page
     var importedImage: Data?
     var textElements: [TextElementConfig] = []
-    var backgroundStyle: BackgroundStyle = .solid(CodableColor(color: .gray)) // Default background for a new page
+    var backgroundStyle: BackgroundStyle = .solid(CodableColor(color: .gray)) // Default background
+
+    // New properties for imported image scale and offset
+    var imageScale: CGFloat = 1.0
+    var imageOffset: CodableCGSize = .zero // Using CodableCGSize for consistency for a new page
     var deviceFrameType: DeviceFrameType = .iPhone15Pro // Default device for a new page
     var deviceFrameOffset: CodableCGSize = .zero
     var canvasSize: CodableCGSize // Automatically set in init based on deviceFrameType

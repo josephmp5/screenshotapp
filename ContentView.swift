@@ -95,23 +95,8 @@ struct ContentView: View {
             return
         }
 
-        let exportWidth: CGFloat
-        let exportHeight: CGFloat
-        let renderScaleFactor: CGFloat = 3.0 // Increase for higher resolution output
-
-        // Determine base dimensions from DeviceMockupView's internal logic (simplified for MVP)
-        // A more robust approach would be to have DeviceMockupView expose its intrinsic content size or accept explicit sizing for rendering.
-        switch selectedDevice {
-        case .iPhone:
-            exportWidth = 200 * renderScaleFactor
-            exportHeight = 400 * renderScaleFactor
-        case .iPad:
-            exportWidth = 300 * renderScaleFactor
-            exportHeight = 400 * renderScaleFactor
-        case .mac:
-            exportWidth = 450 * renderScaleFactor
-            exportHeight = 280 * renderScaleFactor
-        }
+        let exportWidth: CGFloat = 2796
+        let exportHeight: CGFloat = 1290
         
         let viewToRender = DeviceMockupView(
             image: importedImage,
