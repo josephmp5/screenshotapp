@@ -21,10 +21,11 @@ struct ImageBackgroundEditorView: View {
         // The InspectorView should manage showing this view appropriately.
         // We can add a guard here for safety, or rely on InspectorView's logic.
         guard let activePage = document.project.activePage, activePage.backgroundStyle.isImage else {
-            Text("No image background selected for the active page.")
-                .foregroundColor(.gray)
-                .padding()
-            return AnyView(EmptyView()) // Or some placeholder. Return type erased for guard.
+            return AnyView(
+                Text("No image background selected for the active page.")
+                    .foregroundColor(.gray)
+                    .padding()
+            )
         }
 
         // Since we guarded, we can now use a non-optional binding if we construct it carefully.
@@ -45,7 +46,7 @@ struct ImageBackgroundEditorView: View {
                     Text(currentImageModel?.imageData == nil ? "Select Image" : "Change Image")
                 }
             }
-            .onChange(of: selectedPhotoItem) { newItem in // newItem is PhotosPickerItem?
+            .onChange(of: selectedPhotoItem) { _, newItem in // newItem is PhotosPickerItem?
                 Task {
                     guard let item = newItem else { // item is PhotosPickerItem (unwrapped)
                         return
@@ -73,11 +74,13 @@ struct ImageBackgroundEditorView: View {
                             document.project.activePage = pageToUpdate // This updates the project model
                             
                             undoManager?.registerUndo(withTarget: document, handler: { doc in
-                                if var targetPage = doc.project.pages.first(where: { $0.id == pageID }) {
-                                     targetPage.backgroundStyle = oldPageBackgroundStyle
-                                     doc.project.updatePage(targetPage) // Assumes ProjectModel has updatePage
-                                } else {
-                                     // Fallback if page was deleted or ID changed
+                                Task { @MainActor in
+                                    if var targetPage = doc.project.pages.first(where: { $0.id == pageID }) {
+                                         targetPage.backgroundStyle = oldPageBackgroundStyle
+                                         doc.project.updatePage(targetPage) // Assumes ProjectModel has updatePage
+                                    } else {
+                                         // Fallback if page was deleted or ID changed
+                                    }
                                 }
                             })
                             undoManager?.setActionName("Select Background Image")
@@ -145,9 +148,11 @@ struct ImageBackgroundEditorView: View {
                 document.project.activePage = pageToUpdate
 
                 undoManager?.registerUndo(withTarget: document, handler: { doc in
-                    if var targetPage = doc.project.pages.first(where: { $0.id == pageID }) {
-                        targetPage.backgroundStyle = oldPageBackgroundStyle
-                        doc.project.updatePage(targetPage)
+                    Task { @MainActor in
+                        if var targetPage = doc.project.pages.first(where: { $0.id == pageID }) {
+                            targetPage.backgroundStyle = oldPageBackgroundStyle
+                            doc.project.updatePage(targetPage)
+                        }
                     }
                 })
                 undoManager?.setActionName("Change Tiling Mode")
@@ -174,9 +179,11 @@ struct ImageBackgroundEditorView: View {
                 document.project.activePage = pageToUpdate
 
                 undoManager?.registerUndo(withTarget: document, handler: { doc in
-                    if var targetPage = doc.project.pages.first(where: { $0.id == pageID }) {
-                        targetPage.backgroundStyle = oldPageBackgroundStyle
-                        doc.project.updatePage(targetPage)
+                    Task { @MainActor in
+                        if var targetPage = doc.project.pages.first(where: { $0.id == pageID }) {
+                            targetPage.backgroundStyle = oldPageBackgroundStyle
+                            doc.project.updatePage(targetPage)
+                        }
                     }
                 })
                 undoManager?.setActionName("Change Image Opacity")

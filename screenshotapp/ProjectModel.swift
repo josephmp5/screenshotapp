@@ -1,6 +1,99 @@
 import SwiftUI
 import CoreGraphics // For CGPoint, CGSize
 
+// MARK: - Device Definitions
+
+// DeviceType defines the specific characteristics of a device model for rendering
+enum DeviceType: String, CaseIterable, Identifiable, Codable, Hashable {
+    case iPhone15Pro = "iPhone 15 Pro"
+    case iPhone15ProMax = "iPhone 15 Pro Max"
+    case iPadPro11 = "iPad Pro 11-inch"
+    case iPadPro12_9 = "iPad Pro 12.9-inch"
+    case macBookPro14 = "MacBook Pro 14-inch"
+    case macBookPro16 = "MacBook Pro 16-inch"
+    case iPhone16ProMax = "iPhone 16 Pro Max" // Added new device
+    case custom = "Custom" // Represents no specific device frame or a passthrough
+
+    var id: String { self.rawValue }
+
+    var frameAssetName: String {
+        switch self {
+        case .iPhone15Pro: return "iPhone_15_Pro_Frame"
+        case .iPhone15ProMax: return "iPhone_15_Pro_Max_Frame"
+        case .iPadPro11: return "iPad_Pro_11_Frame"
+        case .iPadPro12_9: return "iPad_Pro_12_9_Frame"
+        case .macBookPro14: return "MacBook_Pro_14_Frame"
+        case .macBookPro16: return "MacBook_Pro_16_Frame"
+        case .iPhone16ProMax: return "iPhone_16_Pro_Max_Frame" // Added new device asset name
+        case .custom: return "" // No asset for custom type
+        }
+    }
+
+    // IMPORTANT: These CGRect values define the screen area within the frame asset (in pixels/points of the asset image).
+    // (x, y, width, height) - YOU MUST UPDATE THESE WITH ACCURATE VALUES FOR YOUR ASSETS.
+    var screenAreaPixels: CGRect {
+        switch self {
+        case .iPhone15Pro:    return CGRect(x: 88, y: 88, width: 1114, height: 2420)  // Placeholder
+        case .iPhone15ProMax: return CGRect(x: 88, y: 88, width: 1215, height: 2632)  // Placeholder
+        case .iPadPro11:      return CGRect(x: 50, y: 50, width: 734, height: 1094)  // Placeholder
+        case .iPadPro12_9:    return CGRect(x: 60, y: 60, width: 904, height: 1246)  // Placeholder
+        case .macBookPro14:   return CGRect(x: 40, y: 70, width: 1432, height: 892)  // Placeholder (accounts for notch area)
+        case .macBookPro16:   return CGRect(x: 45, y: 75, width: 1638, height: 1027) // Placeholder (accounts for notch area)
+        case .iPhone16ProMax: return CGRect(x: 90, y: 90, width: 1250, height: 2700)  // USER MUST UPDATE THIS PLACEHOLDER
+        case .custom:         return .zero // No specific screen area for custom
+        }
+    }
+
+    // IMPORTANT: This CGFloat is the corner radius for clipping the screenshot to match the device screen.
+    // YOU MUST UPDATE THESE WITH ACCURATE VALUES FOR YOUR ASSETS.
+    var screenCornerRadius: CGFloat {
+        switch self {
+        case .iPhone15Pro:    return 55.0  // Placeholder
+        case .iPhone15ProMax: return 59.0  // Placeholder
+        case .iPadPro11:      return 18.0  // Placeholder (iPads often have less pronounced rounding)
+        case .iPadPro12_9:    return 18.0  // Placeholder
+        case .macBookPro14:   return 12.0  // Placeholder (MacBooks might have slight rounding or be sharp)
+        case .macBookPro16:   return 12.0  // Placeholder (MacBooks might have slight rounding or be sharp)
+        case .iPhone16ProMax: return 60.0  // USER MUST UPDATE THIS PLACEHOLDER
+        case .custom:         return 0.0   // No corner radius for custom
+        }
+    }
+}
+
+// DeviceFrameType is used in ScreenshotPage to select the desired device appearance.
+// It maps to a DeviceType which holds the detailed rendering information.
+enum DeviceFrameType: String, CaseIterable, Identifiable, Codable, Hashable {
+    case iPhone15Pro = "iPhone 15 Pro"
+    case iPhone15ProMax = "iPhone 15 Pro Max"
+    case iPadPro11 = "iPad Pro 11-inch"
+    case iPadPro12_9 = "iPad Pro 12.9-inch"
+    case macBookPro14 = "MacBook Pro 14-inch"
+    case macBookPro16 = "MacBook Pro 16-inch"
+    case iPhone16ProMax = "iPhone 16 Pro Max" // Added new device frame type
+    case custom = "Custom (No Frame)" // For screenshots without a device frame
+
+    var id: String { self.rawValue }
+
+    static var defaultDevice: DeviceFrameType {
+        .iPhone15Pro // Default to iPhone 15 Pro
+    }
+
+    // This computed property provides the corresponding DeviceType instance.
+    // CanvasView uses this to get frameAssetName, screenAreaPixels, etc.
+    var deviceType: DeviceType {
+        switch self {
+        case .iPhone15Pro: return .iPhone15Pro
+        case .iPhone15ProMax: return .iPhone15ProMax
+        case .iPadPro11: return .iPadPro11
+        case .iPadPro12_9: return .iPadPro12_9
+        case .macBookPro14: return .macBookPro14
+        case .macBookPro16: return .macBookPro16
+        case .iPhone16ProMax: return .iPhone16ProMax // Added mapping for new device
+        case .custom: return .custom // Map DeviceFrameType.custom to DeviceType.custom
+        }
+    }
+}
+
 // CGPoint and CGSize are already Codable and Hashable in Swift/CoreGraphics.
 // Custom extensions for these are no longer needed and cause redeclaration errors.
 
@@ -381,54 +474,28 @@ struct TextElementConfig: Identifiable, Codable, Hashable {
         self.scale = scale
         self.shadowColor = shadowColor
         self.shadowOpacity = shadowOpacity
-        self.shadowRadius = shadowRadius
-        self.shadowOffset = shadowOffset
+    }
+
+    /// A sample instance for SwiftUI Previews.
+    static var preview: TextElementConfig {
+        TextElementConfig(
+            text: "Hello, World!",
+            fontName: "Helvetica Neue",
+            fontSize: 48,
+            textColor: CodableColor(color: .blue),
+            textAlignment: .center,
+            frameAlignment: .center,
+            positionRatio: CGPoint(x: 0.5, y: 0.3),
+            shadowColor: CodableColor(color: .black.opacity(0.3)),
+            shadowOpacity: 1.0,
+            shadowRadius: 5,
+            shadowOffset: CGSize(width: 2, height: 2)
+        )
     }
 }
 
 /// Enum for different device frame mockups.
-enum DeviceFrameType: String, CaseIterable, Identifiable, Codable, Hashable {
-    // Map DeviceFrameType to DeviceType for use in DeviceMockupView
-    var deviceType: DeviceType {
-        switch self {
-        case .iPhone15Pro, .iPhone15: return .iPhone
-        case .iPadPro12_9, .iPadAir: return .iPad
-        case .macBookPro16: return .mac
-        case .appleWatchUltra: return .mac // <-- Replace with .watch if you add DeviceType.watch
-        }
-    }
-    // Allow initializing DeviceFrameType from DeviceType (chooses a default frame for each type)
-    init(deviceType: DeviceType) {
-        switch deviceType {
-        case .iPhone: self = .iPhone15Pro
-        case .iPad: self = .iPadPro12_9
-        case .mac: self = .macBookPro16
-        }
-    }
-    case iPhone15Pro = "iPhone 15 Pro"
-    case iPhone15 = "iPhone 15"
-    case iPadPro12_9 = "iPad Pro 12.9\""
-    case iPadAir = "iPad Air"
-    case macBookPro16 = "MacBook Pro 16\""
-    case appleWatchUltra = "Apple Watch Ultra"
-    // Add more devices as needed
-    // NOTE: Extend the mapping above if you add more DeviceFrameType or DeviceType cases.
-
-    var id: String { self.rawValue }
-
-    var displayName: String {
-        self.rawValue
-    }
-    
-    // Placeholder for actual frame asset names or properties
-    var frameAssetName: String? {
-        switch self {
-        case .iPhone15Pro: return "iphone_15_pro_frame"
-        // ... other assets
-        default: return nil
-        }
-    }
-}
+// The DeviceFrameType enum (and DeviceType) are now defined at the top of this file.
 
 // MARK: - Screenshot Page Definition
 
@@ -439,11 +506,9 @@ struct ScreenshotPage: Identifiable, Codable, Hashable {
     var textElements: [TextElementConfig] = []
     var backgroundStyle: BackgroundStyle = .solid(CodableColor(color: .gray)) // Default background
 
-    // New properties for imported image scale and offset
-    var imageScale: CGFloat = 1.0
-    var imageOffset: CodableCGSize = .zero // Using CodableCGSize for consistency for a new page
     var deviceFrameType: DeviceFrameType = .iPhone15Pro // Default device for a new page
     var deviceFrameOffset: CodableCGSize = .zero
+    var deviceScale: CGFloat = 1.0 // Scale factor for the device mockup on the canvas
     var canvasSize: CodableCGSize // Automatically set in init based on deviceFrameType
     // var scale: CGFloat = 1.0 // Future: Zoom level for this page
     // var watermark: WatermarkConfig? = nil // Future: Watermark for this page
@@ -453,11 +518,12 @@ struct ScreenshotPage: Identifiable, Codable, Hashable {
         self.canvasSize = ScreenshotPage.defaultCanvasSize(for: self.deviceFrameType)
     }
 
-    init(id: UUID = UUID(), name: String? = nil, importedImage: Data? = nil, deviceFrameType: DeviceFrameType = .iPhone15Pro) {
+    init(id: UUID = UUID(), name: String? = nil, importedImage: Data? = nil, deviceFrameType: DeviceFrameType = .iPhone15Pro, deviceScale: CGFloat = 1.0) {
         self.id = id
         self.name = name
         self.importedImage = importedImage
         self.deviceFrameType = deviceFrameType
+        self.deviceScale = deviceScale
         self.canvasSize = ScreenshotPage.defaultCanvasSize(for: deviceFrameType)
         // Other properties like textElements, backgroundStyle, etc., use their default initial values
     }
@@ -465,13 +531,22 @@ struct ScreenshotPage: Identifiable, Codable, Hashable {
     // Helper to get default canvas size (in points) for a device.
     // These are example values and should be verified or made more comprehensive.
     static func defaultCanvasSize(for device: DeviceFrameType) -> CodableCGSize {
-        switch device.deviceType { // Uses the .deviceType mapping from DeviceFrameType
-        case .iPhone:
-            return CodableCGSize(size: CGSize(width: 393, height: 852)) // e.g., iPhone 15 Pro (points)
-        case .iPad:
-            return CodableCGSize(size: CGSize(width: 1024, height: 1366)) // e.g., iPad Pro 12.9-inch (points)
-        case .mac:
-            return CodableCGSize(size: CGSize(width: 1728, height: 1117)) // e.g., MacBook Pro 16-inch (scaled points)
+        switch device.deviceType {
+        case .iPhone15Pro, .iPhone15ProMax:
+            return CodableCGSize(size: CGSize(width: 393, height: 852)) // Default iPhone size (e.g., iPhone 15 Pro points)
+        case .iPadPro11, .iPadPro12_9:
+            return CodableCGSize(size: CGSize(width: 1024, height: 1366)) // Default iPad size (e.g., iPad Pro 12.9-inch points)
+        case .macBookPro14, .macBookPro16:
+            return CodableCGSize(size: CGSize(width: 1728, height: 1117)) // Default Mac size (e.g., MacBook Pro 16-inch scaled points)
+        case .iPhone16ProMax:
+            return CodableCGSize(size: CGSize(width: 430, height: 932)) // Default iPhone Pro Max size (e.g., iPhone 16 Pro Max points)
+        case .custom:
+            return CodableCGSize(size: CGSize(width: 1200, height: 900)) // Default size for custom/passthrough, adjust as needed
+        // If you add more DeviceType cases, ensure they are handled here or in the @unknown default.
+        @unknown default:
+            // Fallback to a generic size or a common device like iPhone 15 Pro
+            // This handles any future DeviceType cases not explicitly listed above.
+            return CodableCGSize(size: CGSize(width: 393, height: 852))
         }
     }
 }

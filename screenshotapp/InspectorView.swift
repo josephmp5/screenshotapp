@@ -12,6 +12,41 @@ struct InspectorView: View {
         var id: Self { self }
     }
 
+    /// A binding to the currently selected text element, which handles undo management.
+    /// When the value of this binding is set (i.e., when `TextElementEditorView` makes a change),
+    /// it triggers a full, undoable update of the project model.
+    private var selectedElementBinding: Binding<TextElementConfig>? {
+        guard let selectedID = selectedTextElementID,
+              let activePage = document.project.activePage,
+              let elementIndex = activePage.textElements.firstIndex(where: { $0.id == selectedID })
+        else {
+            return nil
+        }
+
+        return Binding<TextElementConfig>(
+            get: {
+                // Re-fetch for safety, as the project is a struct and could have been replaced.
+                if let refreshedPage = document.project.activePage,
+                   refreshedPage.id == activePage.id,
+                   elementIndex < refreshedPage.textElements.count {
+                    return refreshedPage.textElements[elementIndex]
+                }
+                // Fallback to the last known good state if something went wrong.
+                return activePage.textElements[elementIndex]
+            },
+            set: { updatedElement in
+                var newProject = document.project
+                guard var pageToUpdate = newProject.activePage,
+                      let indexToUpdate = pageToUpdate.textElements.firstIndex(where: { $0.id == selectedID })
+                else { return }
+
+                pageToUpdate.textElements[indexToUpdate] = updatedElement
+                newProject.updatePage(pageToUpdate)
+                document.changeProjectModel(to: newProject, actionName: "Edit Text Element")
+            }
+        )
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -96,51 +131,13 @@ struct InspectorView: View {
                             .frame(minHeight: 100, maxHeight: 300)
                         }
 
-                        if let selectedID = selectedTextElementID,
-                           let page = document.project.activePage, // Re-unwrap for safety, though activePage is checked above
-                           let selectedElementIndex = page.textElements.firstIndex(where: { $0.id == selectedID }) {
-                            
-                            Text("Edit: \"\(page.textElements[selectedElementIndex].text.prefix(20))...\"")
+                                                if let elementBinding = selectedElementBinding {
+                            Text("Edit: \"\(elementBinding.wrappedValue.text.prefix(20))...\"")
                                 .font(.headline)
                                 .padding(.top)
                             
-                            TextElementEditorView(document: document, element: Binding<TextElementConfig>(
-                                get: {
-                                    // Ensure page and index are still valid if textElements array could change elsewhere.
-                                    // This specific 'page' variable is captured by the closure.
-                                    if let freshPage = document.project.activePage, 
-                                       freshPage.id == page.id, 
-                                       selectedElementIndex < freshPage.textElements.count,
-                                       freshPage.textElements[selectedElementIndex].id == selectedID {
-                                        return freshPage.textElements[selectedElementIndex]
-                                    }
-                                    // Fallback or error handling if element disappeared
-                                    // This might happen if another operation deleted the element and UI didn't refresh selection
-                                    // For simplicity, returning a default or the original 'page' version if still valid.
-                                    return page.textElements[selectedElementIndex] // Or handle error appropriately
-                                },
-                                set: { updatedElement in
-                                    guard var pageToUpdate = document.project.activePage, pageToUpdate.id == page.id else { return }
-                                    let oldElements = pageToUpdate.textElements
-                                    if selectedElementIndex < pageToUpdate.textElements.count &&
-                                       pageToUpdate.textElements[selectedElementIndex].id == selectedID {
-                                        pageToUpdate.textElements[selectedElementIndex] = updatedElement
-                                        document.project.activePage = pageToUpdate // This updates the project model
-                                        
-                                        let pageID = pageToUpdate.id
-                                        undoManager?.registerUndo(withTarget: document, handler: { doc in
-                                            if var targetPage = doc.project.pages.first(where: { $0.id == pageID }) {
-                                                targetPage.textElements = oldElements
-                                                doc.project.updatePage(targetPage)
-                                            } else {
-                                                // Fallback if page was deleted or ID changed, unlikely in this direct flow
-                                            }
-                                        })
-                                        undoManager?.setActionName("Edit Text Element")
-                                    }
-                                }
-                            ))
-                            .id(selectedID) // Ensures TextElementEditorView redraws if selection changes
+                            TextElementEditorView(element: elementBinding)
+                                .id(selectedTextElementID) // Ensures view redraws when selection changes
                         } else if !(document.project.activePage?.textElements.isEmpty ?? true) {
                              Text("Select a text element above to edit.")
                                 .foregroundColor(.gray)
@@ -171,23 +168,15 @@ struct InspectorView: View {
                 return codableColor.color
             },
             set: { newColor in
-                guard var activePage = document.project.activePage else { return }
-                let oldStyle = activePage.backgroundStyle
-                let newSolidStyle = BackgroundStyle.solid(CodableColor(color: newColor))
+                var newProject = document.project
+                guard var activePage = newProject.activePage else { return }
                 
-                // Only update and register undo if the style actually changes
-                if !oldStyle.isEffectivelyEqual(to: newSolidStyle) {
+                let newSolidStyle = BackgroundStyle.solid(CodableColor(color: newColor))
+
+                if !activePage.backgroundStyle.isEffectivelyEqual(to: newSolidStyle) {
                     activePage.backgroundStyle = newSolidStyle
-                    document.project.activePage = activePage // Update the project
-                    
-                    let pageID = activePage.id
-                    undoManager?.registerUndo(withTarget: document, handler: { doc in
-                        if var targetPage = doc.project.pages.first(where: { $0.id == pageID }) {
-                            targetPage.backgroundStyle = oldStyle
-                            doc.project.updatePage(targetPage)
-                        }
-                    })
-                    undoManager?.setActionName("Change Background Color")
+                    newProject.updatePage(activePage)
+                    document.changeProjectModel(to: newProject, actionName: "Change Background Color")
                 }
             }
         )
@@ -204,26 +193,15 @@ struct InspectorView: View {
                 return model
             },
             set: { newModel in
-                guard var activePage = document.project.activePage else { return }
-                let oldStyle = activePage.backgroundStyle
+                var newProject = document.project
+                guard var activePage = newProject.activePage else { return }
+                
                 let newGradientStyle = BackgroundStyle.gradient(newModel)
 
-                // Assuming GradientModel is Equatable or has a way to check for changes
-                // For simplicity, we update if the type is already gradient or if we are setting it.
-                // GradientEditorView might handle its own fine-grained undo for internal changes.
-                // This binding's undo is for changing TO this gradient model from something else or replacing it entirely.
-                if !oldStyle.isEffectivelyEqual(to: newGradientStyle) { // Requires BackgroundStyle.isEffectivelyEqual
+                if !activePage.backgroundStyle.isEffectivelyEqual(to: newGradientStyle) {
                     activePage.backgroundStyle = newGradientStyle
-                    document.project.activePage = activePage
-
-                    let pageID = activePage.id
-                    undoManager?.registerUndo(withTarget: document, handler: { doc in
-                        if var targetPage = doc.project.pages.first(where: { $0.id == pageID }) {
-                            targetPage.backgroundStyle = oldStyle
-                            doc.project.updatePage(targetPage)
-                        }
-                    })
-                    undoManager?.setActionName("Change Gradient")
+                    newProject.updatePage(activePage)
+                    document.changeProjectModel(to: newProject, actionName: "Change Gradient")
                 }
             }
         )
@@ -242,42 +220,37 @@ struct InspectorView: View {
                 }
             },
             set: { newPickerType in
-                guard var activePage = document.project.activePage else { return }
+                // Create a mutable copy of the project model to avoid direct mutation.
+                var newProject = document.project
+                guard var activePage = newProject.activePage else { return }
+
                 let oldStyle = activePage.backgroundStyle
                 var newBackgroundStyle: BackgroundStyle? = nil
 
+                // Determine the new style, only if it's a change.
                 switch newPickerType {
-                case .solid:
-                    if !oldStyle.isSolid {
-                        newBackgroundStyle = .solid(CodableColor(color: .gray))
-                    }
-                case .gradient:
-                    if !oldStyle.isGradient {
-                        let baseColor = oldStyle.solidColor ?? (oldStyle.imageModel?.averageColor ?? CodableColor(color: .blue))
-                        newBackgroundStyle = .gradient(GradientModel(
-                            colors: [baseColor, CodableColor(color: baseColor.color.opacity(0.5))],
-                            startPoint: .init(unitPoint: .topLeading), endPoint: .init(unitPoint: .bottomTrailing)
-                        ))
-                    }
-                case .image:
-                    if !oldStyle.isImage {
-                        newBackgroundStyle = .image(ImageBackgroundModel()) // Placeholder, ImageBackgroundEditorView handles selection
-                    }
+                case .solid where !oldStyle.isSolid:
+                    newBackgroundStyle = .solid(CodableColor(color: .gray))
+                case .gradient where !oldStyle.isGradient:
+                    let baseColor = oldStyle.solidColor ?? (oldStyle.imageModel?.averageColor ?? CodableColor(color: .blue))
+                    newBackgroundStyle = .gradient(GradientModel(
+                        colors: [baseColor, CodableColor(color: baseColor.color.opacity(0.5))],
+                        startPoint: .init(unitPoint: .topLeading), endPoint: .init(unitPoint: .bottomTrailing)
+                    ))
+                case .image where !oldStyle.isImage:
+                    newBackgroundStyle = .image(ImageBackgroundModel()) // Default empty image model
+                default:
+                    // No change needed if the type is already correct.
+                    return
                 }
 
+                // If a new style was determined, apply it and commit the change.
                 if let newStyle = newBackgroundStyle {
                     activePage.backgroundStyle = newStyle
-                    document.project.activePage = activePage
-                    
-                    let pageID = activePage.id
-                    undoManager?.registerUndo(withTarget: document, handler: { doc in
-                        if var targetPage = doc.project.pages.first(where: { $0.id == pageID }) {
-                            targetPage.backgroundStyle = oldStyle
-                            doc.project.updatePage(targetPage)
-                        }
-                    })
-                    undoManager?.setActionName("Change Background Type")
+                    newProject.updatePage(activePage)
+                    document.changeProjectModel(to: newProject, actionName: "Change Background Type")
                 }
+
             }
         )
     }
@@ -285,70 +258,69 @@ struct InspectorView: View {
     // MARK: - Text Element Actions
 
     private func addTextElement() {
-        guard var activePage = document.project.activePage else { return }
-        let pageID = activePage.id
-        let oldElements = activePage.textElements
+        // Create a mutable copy of the project model struct.
+        var newProject = document.project
         
-        let newElement = TextElementConfig(text: "New Text", positionRatio: CGPoint(x: 0.5, y: 0.5)) // Default to center
+        // Safely get the active page from the new model copy.
+        guard var activePage = newProject.activePage else { return }
+        
+        // Apply the change to the page copy.
+        let newElement = TextElementConfig(text: "New Text", positionRatio: CGPoint(x: 0.5, y: 0.5))
         activePage.textElements.append(newElement)
-        document.project.activePage = activePage
-        selectedTextElementID = newElement.id // Select the new element
         
-        undoManager?.registerUndo(withTarget: document, handler: { doc in
-            if var targetPage = doc.project.pages.first(where: { $0.id == pageID }) {
-                targetPage.textElements = oldElements
-                doc.project.updatePage(targetPage)
-                // If the new element was selected, and now it's gone, deselect.
-                // This might be complex if selection could change due to other reasons.
-                // if self.selectedTextElementID == newElement.id { self.selectedTextElementID = nil }
-            }
-        })
-        undoManager?.setActionName("Add Text Element")
+        // Update the page in the project model copy.
+        newProject.updatePage(activePage)
+        
+        // Call the centralized change function to apply the update and register undo.
+        document.changeProjectModel(to: newProject, actionName: "Add Text Element")
+        
+        // Update local UI state *after* the model has been changed.
+        selectedTextElementID = newElement.id
     }
 
     private func deleteTextElements(at offsets: IndexSet) {
-        guard var activePage = document.project.activePage else { return }
-        let pageID = activePage.id
-        let oldElements = activePage.textElements
-        
+        // Create a mutable copy of the project model to avoid direct mutation.
+        var newProject = document.project
+        guard var activePage = newProject.activePage else { return }
+
+        // Identify which elements will be deleted to update selection state later.
         let idsToDelete = Set(offsets.map { activePage.textElements[$0].id })
-        
+
+        // Perform the deletion on the page copy.
         activePage.textElements.remove(atOffsets: offsets)
-        document.project.activePage = activePage
         
-        undoManager?.registerUndo(withTarget: document, handler: { doc in
-            if var targetPage = doc.project.pages.first(where: { $0.id == pageID }) {
-                targetPage.textElements = oldElements
-                doc.project.updatePage(targetPage)
-            }
-        })
-        undoManager?.setActionName("Delete Text Element(s)")
-        
+        // Update the page within the project copy.
+        newProject.updatePage(activePage)
+
+        // Atomically apply the change and register a single undo action.
+        document.changeProjectModel(to: newProject, actionName: "Delete Text Element(s)")
+
+        // Update local UI state *after* the model change.
         if let currentSelectedID = selectedTextElementID, idsToDelete.contains(currentSelectedID) {
             selectedTextElementID = nil
         }
     }
 
     private func moveTextElement(up: Bool) {
-        guard var activePage = document.project.activePage, 
+        // Create a mutable copy of the project model.
+        var newProject = document.project
+        guard var activePage = newProject.activePage,
               let selectedID = selectedTextElementID,
               let currentIndex = activePage.textElements.firstIndex(where: { $0.id == selectedID }) else { return }
-        
-        let pageID = activePage.id
+
+        // Determine the target index and ensure it's valid.
         let targetIndex = up ? currentIndex - 1 : currentIndex + 1
-        guard targetIndex >= 0 && targetIndex < activePage.textElements.count else { return }
-        
-        let oldElements = activePage.textElements
+        guard activePage.textElements.indices.contains(targetIndex) else { return }
+
+        // Perform the swap on the page copy.
         activePage.textElements.swapAt(currentIndex, targetIndex)
-        document.project.activePage = activePage
         
-        undoManager?.registerUndo(withTarget: document, handler: { doc in
-            if var targetPage = doc.project.pages.first(where: { $0.id == pageID }) {
-                targetPage.textElements = oldElements
-                doc.project.updatePage(targetPage)
-            }
-        })
-        undoManager?.setActionName(up ? "Move Text Up" : "Move Text Down")
+        // Update the page within the project copy.
+        newProject.updatePage(activePage)
+
+        // Atomically apply the change and register a single undo action.
+        let actionName = up ? "Move Element Up" : "Move Element Down"
+        document.changeProjectModel(to: newProject, actionName: actionName)
     }
 
     private func canMoveElement(up: Bool) -> Bool {
@@ -383,8 +355,10 @@ struct InspectorView_Previews: PreviewProvider {
         samplePage.textElements.append(TextElementConfig(text: "Another Element"))
         
         // Add the page to the project and set it as active
-        document.project.pages.append(samplePage)
-        document.project.activePageID = samplePage.id
+        var newProject = document.project
+        newProject.pages.append(samplePage)
+        newProject.activePageID = samplePage.id
+        document.changeProjectModel(to: newProject, actionName: "Add New Page")
         
         return InspectorView(document: document)
             .frame(width: 320) // Typical inspector width

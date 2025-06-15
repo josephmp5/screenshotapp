@@ -77,13 +77,17 @@ struct SidebarView: View {
                             if document.project.pages.first(where: { $0.id == pageIDToDelete }) != nil {
                                 let um = envUndoManager // Assign to local constant
                                 um?.registerUndo(withTarget: document, handler: { doc in
-                                    doc.project.pages = originalPages
-                                    doc.project.activePageID = originalActiveID
-                                    // The document wrapper should handle necessary updates/publishing.
+                                    Task { @MainActor in
+                                        doc.project.pages = originalPages
+                                        doc.project.activePageID = originalActiveID
+                                        // The document wrapper should handle necessary updates/publishing.
+                                    }
                                 })
                                 um?.setActionName("Delete Page")
                             }
-                            document.project.removePage(withID: pageIDToDelete)
+                            Task { @MainActor in
+                                document.project.removePage(withID: pageIDToDelete)
+                            }
                         }
                     }
                 }
@@ -100,12 +104,16 @@ struct SidebarView: View {
                         let originalActiveID = document.project.activePageID
                         // Register undo with the document as the target
                         undoManager.registerUndo(withTarget: document) { doc in
-                            doc.project.pages = originalPages
-                            doc.project.activePageID = originalActiveID
+                            Task { @MainActor in
+                                doc.project.pages = originalPages
+                                doc.project.activePageID = originalActiveID
+                            }
                         }
                         undoManager.setActionName("Add Page")
                     }
-                    document.project.addNewPage()
+                    Task { @MainActor in
+                        document.project.addNewPage()
+                    }
                 }) {
                     Label("Add Page", systemImage: "plus.circle.fill")
                 }
@@ -115,20 +123,7 @@ struct SidebarView: View {
     }
 }
 
-// Helper for previews with @Binding. Often good to put in a separate PreviewsHelper.swift file.
-struct StatefulPreviewWrapper<Value, Content: View>: View {
-    @State var value: Value
-    var content: (Binding<Value>) -> Content
 
-    init(_ initialValue: Value, content: @escaping (Binding<Value>) -> Content) {
-        self._value = State(initialValue: initialValue)
-        self.content = content
-    }
-
-    var body: some View {
-        content($value)
-    }
-}
 
 struct SidebarView_Previews: PreviewProvider {
     static var previews: some View {

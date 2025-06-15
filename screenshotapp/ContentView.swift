@@ -1,51 +1,49 @@
 import SwiftUI
 
+/// The main view of the application, organizing the UI into a three-column layout.
 struct ContentView: View {
     @ObservedObject var document: ScreenshotProjectDocument
     @Environment(\.undoManager) var undoManager
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var selectedAppSection: SidebarView.AppSection? = .projects // Default to projects/canvas
-    @State private var exportTrigger: UUID? = nil
+    @State private var selectedTemplateID: String? = nil
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
+            // --- Sidebar (Left Panel) ---
             SidebarView(document: document, currentSelection: $selectedAppSection)
-                .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 350)
+                .navigationSplitViewColumnWidth(min: 220, ideal: 250)
         } content: {
+            // --- Canvas (Main Content Area) ---
             Group {
                 if let section = selectedAppSection {
                     switch section {
+                    case .projects:
+                        CanvasView(document: $document.project, selectedTemplateID: $selectedTemplateID)
                     case .templates:
                         // Placeholder for Template Browser View
-                        Text("Templates Browser (Document: \(document.project.id.uuidString.prefix(8)))")
-                            .font(.largeTitle)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.purple.opacity(0.1))
+                        Text("Templates Browser")
                     case .devices:
-                        // Placeholder for Device Configuration View
-                        Text("Device Configuration (Document: \(document.project.id.uuidString.prefix(8)))")
-                            .font(.largeTitle)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.orange.opacity(0.1))
+                        // Placeholder for Device Browser View
+                        Text("Device Browser")
                     case .assets:
-                        // Placeholder for Asset Library View
-                        Text("Asset Library (Document: \(document.project.id.uuidString.prefix(8)))")
-                            .font(.largeTitle)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.yellow.opacity(0.1))
-                    case .projects:
-                        // The main canvas area is now delegated to CanvasView
-                        CanvasView(document: document, exportTrigger: $exportTrigger)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // Placeholder for Assets Browser View
+                        Text("Assets Browser")
                     }
                 } else {
-                    ContentUnavailableView("Select an item from the sidebar", systemImage: "sidebar.left")
+                    Text("Select a section from the sidebar.")
                 }
             }
+            .navigationSplitViewColumnWidth(min: 400, ideal: 600)
         } detail: {
+            // --- Inspector (Right Panel) ---
             InspectorView(document: document)
-                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 400)
+                .navigationSplitViewColumnWidth(min: 250, ideal: 300)
+        }
+        .onAppear {
+            // Assign the environment's undo manager to the document
+            document.undoManager = self.undoManager
         }
         .toolbar {
             ToolbarItemGroup(placement: .automatic) {
@@ -65,7 +63,7 @@ struct ContentView: View {
 
                 // Export button
                 Button(action: {
-                    exportTrigger = UUID()
+                    // exportTrigger = UUID()
                     print("Export triggered for document: \(document.project.id)")
                 }) {
                     Label("Export", systemImage: "square.and.arrow.up")
@@ -91,7 +89,7 @@ struct ContentView: View {
                 .disabled(!(undoManager?.canRedo ?? false))
             }
         }
-        .navigationTitle(selectedAppSection?.rawValue ?? "Screenshot Project")
+        .navigationTitle("Screenshot App")
     }
 }
 

@@ -150,12 +150,14 @@ struct GradientEditorView: View {
         document.project.activePage = activePage 
         
         undoManager?.registerUndo(withTarget: document, handler: { doc in
-            guard var pageToRevert = doc.project.activePage else {
-                 print("GradientEditorView Undo: No active page found to revert.")
-                return
+            Task { @MainActor in
+                guard var pageToRevert = doc.project.activePage else {
+                     print("GradientEditorView Undo: No active page found to revert.")
+                    return
+                }
+                pageToRevert.backgroundStyle = originalPageBackgroundStyle // Revert to the original style
+                doc.project.activePage = pageToRevert // Update the document
             }
-            pageToRevert.backgroundStyle = originalPageBackgroundStyle // Revert to the original style
-            doc.project.activePage = pageToRevert // Update the document
         })
         undoManager?.setActionName(actionName)
     }
